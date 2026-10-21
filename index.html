@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Messages</title>
+    <title>Convo — Premium Messaging</title>
 
-    <meta name="theme-color" content="#34C759">
+    <meta name="theme-color" content="#007aff">
+    <link id="convoFavicon" rel="icon" type="image/svg+xml" href="">
 
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
@@ -1055,7 +1056,418 @@
                 height: 72px;
             }
         }
+
+
+        /* =========================================================
+           CONVO PREMIUM REDESIGN — presentation only; existing app
+           markup, event handlers, IDs and messaging logic are retained.
+           ========================================================= */
+        :root {
+            --bg-color: #f4f3fb;
+            --container-bg: #ffffff;
+            --sidebar-bg: #f8f7ff;
+            --sidebar-border: rgba(104, 91, 170, .13);
+            --chat-bg: #ffffff;
+            --header-bg: rgba(255,255,255,.86);
+            --header-border: rgba(104, 91, 170, .12);
+            --text-color: #10243f;
+            --text-secondary: #8986a3;
+            --msg-sent-bg: linear-gradient(135deg, #0a84ff 0%, #007aff 100%);
+            --msg-sent-text: #ffffff;
+            --msg-received-bg: #f0eff7;
+            --msg-received-text: #29263d;
+            --input-bg: #f5f9ff;
+            --input-border: #e8e5f5;
+            --input-text: #10243f;
+            --hover-bg: #eeecfb;
+            --active-chat-bg: linear-gradient(135deg, #0a84ff 0%, #007aff 100%);
+            --active-chat-text: #ffffff;
+            --primary: #7867f5;
+        }
+        [data-theme="dark"] {
+            --bg-color: #11101a;
+            --container-bg: #111827;
+            --sidebar-bg: #171622;
+            --sidebar-border: rgba(190,180,255,.12);
+            --chat-bg: #111827;
+            --header-bg: rgba(25,24,36,.88);
+            --header-border: rgba(190,180,255,.12);
+            --text-color: #f2f0ff;
+            --text-secondary: #a19bbd;
+            --msg-sent-bg: linear-gradient(135deg, #3395ff 0%, #0066dd 100%);
+            --msg-sent-text: #ffffff;
+            --msg-received-bg: #292738;
+            --msg-received-text: #f3f0ff;
+            --input-bg: #211f30;
+            --input-border: #373349;
+            --input-text: #f5f2ff;
+            --hover-bg: #2b283e;
+            --active-chat-bg: linear-gradient(135deg, #3395ff 0%, #0066dd 100%);
+            --active-chat-text: #ffffff;
+            --primary: #9a8cff;
+        }
+        * { scrollbar-width: thin; scrollbar-color: rgba(133,119,220,.32) transparent; }
+        body {
+            background:
+                radial-gradient(ellipse at 12% 5%, rgba(153,135,255,.18), transparent 34%),
+                radial-gradient(ellipse at 90% 95%, rgba(106,189,255,.12), transparent 32%),
+                var(--bg-color);
+            color: var(--text-color);
+            padding: 24px;
+            transition: background .25s ease, color .25s ease;
+        }
+        .mac-window {
+            width: min(1440px, 100%);
+            height: min(900px, calc(100vh - 48px));
+            border: 1px solid rgba(128,116,195,.19);
+            border-radius: 22px;
+            box-shadow: 0 30px 90px rgba(43,34,95,.16), 0 5px 20px rgba(43,34,95,.06);
+            background: var(--container-bg);
+        }
+        .mac-titlebar {
+            height: 42px;
+            padding: 0 17px;
+            background: var(--container-bg);
+            border-bottom: 1px solid var(--sidebar-border);
+            position: relative;
+        }
+        .traffic-lights { gap: 7px; }
+        .traffic-dot { width: 10px; height: 10px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.07); }
+        .mac-titlebar::after {
+            content: "CONVO  /  MESSAGING SPACE";
+            position: absolute; left: 50%; transform: translateX(-50%);
+            color: var(--text-secondary); font-size: 10px; letter-spacing: .16em; font-weight: 800;
+        }
+        .app-layout { height: calc(100% - 42px); }
+        .sidebar { width: 300px; background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-border); }
+        .sidebar-header { padding: 23px 18px 17px; gap: 16px; }
+        .sidebar-header h2 { font-size: 1.35rem; letter-spacing: -.045em; }
+        .sidebar-header h2::before {
+            content: "C"; display: inline-flex; align-items: center; justify-content: center;
+            width: 29px; height: 29px; margin-right: 9px; border-radius: 10px;
+            color: white; font-size: 15px; vertical-align: -4px;
+            background: linear-gradient(140deg,#66adff,#007aff);
+            box-shadow: 0 5px 12px rgba(120,103,245,.25);
+        }
+        .sidebar-search { padding: 11px 12px 11px 34px; border-radius: 12px; border-color: var(--sidebar-border); font-size: .85rem; }
+        .chat-list { padding: 10px; gap: 5px; }
+        .chat-list-item { padding: 12px; border-radius: 14px; gap: 11px; transition: background .18s ease, transform .18s ease; }
+        .chat-list-item:hover { transform: translateX(2px); }
+        .chat-list-item.active { box-shadow: 0 8px 18px rgba(120,103,245,.19); }
+        .list-avatar { background: linear-gradient(145deg,#a79cff,#7060e8); box-shadow: 0 3px 10px rgba(99,82,205,.12); }
+        .chat-name { font-size: .9rem; font-weight: 700; }
+        .chat-preview { font-size: .77rem; }
+        .sidebar-footer { padding: 14px; }
+        .chat-pane { background: var(--chat-bg); }
+        .chat-header { height: 70px; padding: 0 25px; border-bottom: 1px solid var(--header-border); }
+        .chat-header-left { gap: 12px; }
+        .chat-header-title { align-items: flex-start; gap: 3px; }
+        .chat-header-title span:first-child { font-size: .98rem; font-weight: 750; letter-spacing: -.02em; }
+        #connectionStatus { display: inline-flex; align-items: center; gap: 5px; }
+        #connectionStatus::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #a8a4b8; }
+        .icon-button { border-radius: 10px; padding: 8px 10px; transition: background .18s ease, transform .18s ease; }
+        .icon-button:hover { background: var(--hover-bg); }
+        .messages-container { padding: 25px clamp(18px,4vw,56px); gap: 8px; }
+        .date-divider { margin: 17px 0; text-transform: uppercase; letter-spacing: .12em; font-size: .64rem; font-weight: 750; }
+        .message-wrapper { max-width: min(76%, 620px); margin-top: 5px; animation: convoMessageIn .2s ease both; }
+        @keyframes convoMessageIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .bubble { padding: 11px 15px; border-radius: 18px; font-size: .91rem; line-height: 1.48; box-shadow: 0 2px 5px rgba(36,30,80,.035); }
+        .message-wrapper.sent .bubble { background: var(--msg-sent-bg); border-bottom-right-radius: 6px; box-shadow: 0 5px 14px rgba(120,103,245,.15); }
+        .message-wrapper.received .bubble { border-bottom-left-radius: 6px; }
+        .sender-tag { font-size: .68rem; font-weight: 700; margin: 0 4px 4px; }
+        .msg-meta-receipt { padding: 3px 5px 0; }
+        .input-bar-container { padding: 10px 17px 13px; background: var(--chat-bg); border-top: 1px solid var(--sidebar-border); }
+        .input-bar { padding: 6px 0 0; gap: 10px; }
+        .plus-btn { width: 38px; height: 38px; border-radius: 13px; background: var(--input-bg); border-color: var(--input-border); transition: all .18s ease; }
+        .plus-btn:hover { transform: translateY(-1px); }
+        .input-wrapper input { padding: 13px 17px; min-height: 44px; border-radius: 15px; border-color: var(--input-border); background: var(--input-bg); font-size: .91rem; transition: border-color .18s ease, box-shadow .18s ease; }
+        .input-wrapper input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(120,103,245,.12); }
+        .send-arrow-btn { width: 40px; height: 40px; border-radius: 14px; box-shadow: 0 5px 13px rgba(120,103,245,.25); transition: transform .15s ease; }
+        .send-arrow-btn:hover { transform: translateY(-2px); }
+        .ios-btn { border-radius: 12px; background: linear-gradient(135deg,#0a84ff,#007aff); box-shadow: 0 7px 17px rgba(120,103,245,.16); transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease; }
+        .ios-btn:hover { opacity: 1; transform: translateY(-1px); box-shadow: 0 10px 22px rgba(120,103,245,.23); }
+        .ios-btn-secondary { background: var(--hover-bg); color: var(--text-color); border: 1px solid var(--sidebar-border); box-shadow: none; }
+        .ios-btn-secondary:hover { background: var(--hover-bg); box-shadow: 0 5px 14px rgba(60,48,120,.08); }
+        #setupScreen { inset: 42px 0 0 0; background: radial-gradient(ellipse at 50% 0%, rgba(143,126,255,.13), transparent 55%), var(--container-bg); padding: 36px 24px; }
+        #setupScreen h1 { font-size: clamp(2.2rem,5vw,3.25rem); letter-spacing: -.065em; background: linear-gradient(120deg,#66adff,#6b5ae6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        #setupScreen p { margin-top: 8px; font-size: .96rem; }
+        .auth-box { max-width: 350px; gap: 13px; }
+        .auth-box input, .modal input { padding: 13px 15px; border-radius: 12px; }
+        .modal-overlay { background: rgba(19,16,39,.48); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+        .modal { border-radius: 20px; padding: 25px; box-shadow: 0 24px 80px rgba(20,15,55,.22); }
+        .context-menu { border-radius: 14px; box-shadow: 0 14px 40px rgba(20,15,55,.18); }
+        .context-menu-item { padding: 10px 12px; }
+        #replyBanner { padding: 10px 14px; border-radius: 12px; margin: 0 0 4px; }
+        #videoContainer { border-radius: 14px; margin: 10px; }
+        button, input { -webkit-tap-highlight-color: transparent; }
+        button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+        @media (max-width: 700px) {
+            body { padding: 0; }
+            .mac-window { height: 100dvh; border-radius: 0; border: none; }
+            .mac-titlebar { height: 38px; }
+            .mac-titlebar::after { font-size: 9px; }
+            .app-layout { height: calc(100% - 38px); }
+            #setupScreen { inset: 38px 0 0 0; }
+            .sidebar { width: 230px; }
+            .chat-header { height: 62px; padding: 0 14px; }
+            .messages-container { padding: 17px 13px; }
+            .message-wrapper { max-width: 88%; }
+            .input-bar-container { padding: 8px 10px 12px; }
+            .input-bar { gap: 7px; }
+            .plus-btn { width: 34px; height: 34px; }
+            .input-wrapper input { padding: 11px 13px; }
+        }
+        @media (max-width: 520px) {
+            .sidebar { display: none; }
+            .chat-header-title { align-items: flex-start; }
+            .chat-header-actions { gap: 3px; }
+            .chat-header-actions .icon-button { padding: 8px; }
+            .messages-container { padding: 15px 12px; }
+            .incoming-call-actions { gap: 48px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+        }
+
+    
+
+        /* Convo workspace redesign: a persistent multi-chat workspace */
+        body { background: #eef5ff; }
+        .mac-window { border-radius: 22px; overflow: hidden; box-shadow: 0 30px 100px rgba(30,22,70,.18); }
+        .mac-titlebar { display:none; }
+        .app-layout { height:100%; min-height:650px; }
+        .sidebar { width:292px; flex:0 0 292px; background:linear-gradient(180deg,#f5f9ff 0%,#f5f3fb 100%); border-right:1px solid rgba(100,80,160,.13); }
+        .sidebar-header { padding:25px 18px 16px; border:0; }
+        .sidebar-header h2 { font-size:1.45rem; font-weight:780; letter-spacing:-.055em; }
+        .sidebar-header h2::before { content:''; display:inline-block; width:11px; height:11px; border-radius:4px; background:linear-gradient(135deg,#1684ff,#5d47d9); margin-right:10px; box-shadow:0 3px 10px #1684ff66; }
+        .sidebar-search { margin-top:15px; border:1px solid #e8e3f3; background:#fff; border-radius:13px; padding:12px 13px; }
+        .chat-list { padding:5px 10px 16px; gap:5px; }
+        .chat-list-item { border-radius:13px; padding:12px; border:1px solid transparent; cursor:pointer; }
+        .chat-list-item.active { background:linear-gradient(120deg,#ece7ff,#f5f1ff); border-color:#ded5ff; box-shadow:none; color:#35266e; }
+        .chat-list-item.active .chat-preview,.chat-list-item.active .chat-time { color:#7566a8; }
+        .list-avatar { border-radius:12px; }
+        .convo-sidebar-actions { display:flex; flex-direction:column; gap:9px; padding:13px; background:transparent; border-top:1px solid rgba(100,80,160,.11); }
+        .sidebar-action { display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%; border:1px solid #e5e0f0; border-radius:13px; padding:12px 13px; background:#fff; color:#4b4560; font-size:.86rem; font-weight:650; cursor:pointer; transition:transform .16s,box-shadow .16s,border-color .16s; }
+        .sidebar-action:hover { transform:translateY(-1px); border-color:#cfc3ff; box-shadow:0 7px 18px #5c43a012; }
+        .sidebar-action span { font-size:1.1rem; color:#7658e8; }
+        .sidebar-action.primary { color:#fff; border-color:transparent; background:linear-gradient(135deg,#0a84ff,#005ac1); box-shadow:0 8px 18px #7358e833; }
+        .sidebar-action.primary span { color:#fff; }
+        .sidebar-account-row { display:flex; align-items:center; gap:10px; margin-top:8px; padding:13px 4px 2px; border-top:1px solid #e7e2f0; }
+        .account-avatar,.auth-brand-mark { display:grid; place-items:center; color:white; font-weight:800; background:linear-gradient(135deg,#1684ff,#5b43d0); box-shadow:0 7px 16px #7156dc35; }
+        .account-avatar { width:36px;height:36px;border-radius:12px; flex:0 0 36px; }
+        .account-copy { display:flex; flex-direction:column; min-width:0; flex:1; gap:3px; }
+        .account-copy strong { font-size:.8rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .account-copy span { color:#938ba8; font-size:.69rem; }
+        .account-menu-button { border:0;background:transparent;color:#8a829d;font-size:1.3rem;border-radius:8px;padding:5px 9px;cursor:pointer; }
+        .legacy-hidden-control { display:none!important; }
+        #setupScreen { background:radial-gradient(ellipse at 50% 10%,#eee9ff 0%,#f8f7fc 45%,#eef5ff 100%); }
+        #setupScreen h1 { letter-spacing:-.06em; font-weight:800; }
+        .auth-brand-mark { width:58px;height:58px;border-radius:19px;font-size:1.6rem;margin:0 auto 17px; }
+        #setupScreen > div:first-child { text-align:center; }
+        #setupScreen > div:first-child p { color:#8b849d; }
+        .auth-box { background:#fff; border:1px solid #eee9f6; padding:25px; border-radius:20px; box-shadow:0 18px 60px #44316d12; }
+        .auth-box input { border-radius:12px; }
+        #loginBtn { border-radius:12px; padding:14px; background:linear-gradient(135deg,#0a84ff,#005ac1); }
+        .chat-pane { background:#fff; }
+        @media(max-width:760px) { .sidebar{width:240px;flex-basis:240px;} .convo-sidebar-actions{padding:9px;} }
+        @media(max-width:620px) { .sidebar{width:190px;flex-basis:190px;} .sidebar-header{padding:17px 12px 10px;} .chat-list{padding:5px;} .sidebar-action{font-size:.75rem;padding:10px 8px;} }
+
+
+        /* Convo premium 2026 interface refresh */
+        :root { --convo-accent:#7655ee; --convo-accent-2:#9a7bff; }
+        body { background:radial-gradient(ellipse at 18% 0%,#ede8ff 0%,#f6f5fb 38%,#eff1f8 100%); color:#222033; }
+        .mac-window { width:min(1500px,calc(100vw - 36px)); height:min(940px,calc(100dvh - 36px)); min-height:560px; margin:18px auto; border:1px solid rgba(120,102,168,.15); border-radius:26px; box-shadow:0 35px 110px rgba(42,31,84,.20),0 2px 8px rgba(42,31,84,.05); }
+        .app-layout { min-height:0; }
+        .sidebar { width:310px; flex-basis:310px; background:linear-gradient(180deg,#fcfbff 0%,#f7f5fc 100%); }
+        .sidebar-header { padding:25px 19px 14px; }
+        .sidebar-header h2 { font-size:1.42rem; }
+        .sidebar-search { width:100%; box-sizing:border-box; transition:border-color .18s,box-shadow .18s; }
+        .sidebar-search:focus { border-color:#b6a4ff; box-shadow:0 0 0 4px #8d74f51b; outline:0; }
+        .chat-list { overflow-y:auto; }
+        .chat-list-item { display:flex; gap:11px; min-height:66px; transition:background .16s,border-color .16s,transform .16s; }
+        .chat-list-item:hover { background:#f0edfa; }
+        .chat-list-item.active { background:linear-gradient(110deg,#ebe5ff,#f4f0ff); border-color:#ddd3ff; }
+        .chat-list-info { min-width:0; flex:1; }
+        .chat-name,.chat-preview { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .chat-time { font-size:.62rem; font-weight:750; letter-spacing:.04em; }
+        .chat-preview { max-width:100%; }
+        .chat-pane { min-width:0; background:linear-gradient(180deg,#fff 0%,#fdfcff 100%); }
+        .chat-header { min-height:76px; border-bottom:1px solid #eaf3ff; box-shadow:0 4px 16px #2b1b5105; }
+        #roomTitleDisplay { font-size:1rem; font-weight:760; letter-spacing:-.02em; }
+        #connectionStatus { font-size:.7rem; }
+        .messages-container { background:radial-gradient(ellipse at 50% 0%,#fff 0%,#fdfcff 72%,#faf9fd 100%); gap:14px; }
+        .message-wrapper { animation:convoMessageIn .22s ease-out both; }
+        @keyframes convoMessageIn { from { opacity:0; transform:translateY(5px) scale(.99); } to { opacity:1; transform:translateY(0) scale(1); } }
+        .edited-label { display:inline-block; margin-left:7px; opacity:.68; font-size:.62rem; }
+        .bubble { border-radius:18px; padding:11px 14px; line-height:1.48; box-shadow:0 2px 5px #22123a08; overflow-wrap:anywhere; }
+        .message-wrapper.sent .bubble { background:linear-gradient(135deg,#8061f2,#6e4ee0); border-bottom-right-radius:6px; box-shadow:0 5px 15px #7757e51d; }
+        .message-wrapper.received .bubble { border:1px solid #eaf3ff; background:#fff; border-bottom-left-radius:6px; }
+        .chat-pane.convo-drop-active { outline:3px dashed #8b70f5; outline-offset:-12px; background:#f8f5ff; }
+        .chat-pane.convo-drop-active::after { content:"Drop a file to share it"; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:20; padding:14px 20px; border-radius:14px; background:#6f50df; color:#fff; font-weight:750; box-shadow:0 12px 30px #49329c44; pointer-events:none; }
+        .input-bar-container { border-top:1px solid #eaf3ff; background:rgba(255,255,255,.92); padding:14px 18px 17px; }
+        .input-bar { padding:5px; gap:9px; border:1px solid #e9e5f2; background:#fff; border-radius:18px; box-shadow:0 5px 20px #2c1b5108; }
+        .input-wrapper input { border:0!important; background:transparent!important; box-shadow:none!important; }
+        .plus-btn { border-radius:12px; transition:transform .15s,background .15s; }
+        .plus-btn:hover { transform:translateY(-1px); background:#f0ebff; }
+        .send-arrow-btn { border-radius:13px; background:linear-gradient(135deg,#8567f6,#6747d7); box-shadow:0 4px 10px #7655ee35; }
+        .modal-overlay { backdrop-filter:blur(12px); background:rgba(23,17,43,.38); padding:18px; }
+        .modal { border:1px solid #eee9f7; border-radius:23px; box-shadow:0 28px 90px #21133d33; padding:26px; }
+        .convo-dialog { width:min(440px,100%); gap:13px; }
+        .convo-dialog h3 { font-size:1.35rem; letter-spacing:-.04em; margin:0; }
+        .dialog-kicker { color:#8065e8; font-size:.67rem; font-weight:800; letter-spacing:.13em; }
+        .dialog-description { color:#817a93; font-size:.84rem; line-height:1.55; margin:0 0 3px; }
+        .convo-dialog label { color:#514b64; font-size:.78rem; font-weight:700; }
+        .convo-dialog input:not([type=checkbox]) { box-sizing:border-box; width:100%; border:1px solid #e6e0f0; background:#f5f9ff; border-radius:12px; padding:13px 14px; outline:none; }
+        .convo-dialog input:focus { border-color:#a794ff; box-shadow:0 0 0 4px #8b70f51a; }
+        .dialog-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:7px; }
+        .dialog-actions .ios-btn { width:auto; min-width:110px; }
+        .settings-option { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 0; border-bottom:1px solid #eaf3ff; }
+        .settings-option div { display:flex; flex-direction:column; gap:4px; }
+        .settings-option strong { font-size:.85rem; }
+        .settings-option span { color:#89829a; font-size:.74rem; }
+        .settings-option .ios-btn { width:auto; padding:9px 12px; }
+        .settings-check { display:flex; align-items:center; gap:9px; padding:9px 0; }
+        .settings-check input { accent-color:#7655ee; }
+        .detail-section { display:flex; flex-direction:column; gap:8px; margin:15px 0; }
+        .detail-section > strong { font-size:.78rem; }
+        .invite-code-row { display:flex; align-items:center; gap:8px; }
+        .invite-code-row code { overflow-wrap:anywhere; flex:1; padding:10px; border-radius:10px; background:#f4f1fc; color:#6148c3; font-size:.75rem; }
+        .invite-code-row .ios-btn { width:auto; padding:8px 12px; }
+        .detail-list { display:flex; flex-direction:column; gap:6px; color:#88819a; font-size:.78rem; }
+        .detail-list-item { padding:9px 10px; border-radius:9px; background:#f7f5fc; color:#504963; overflow-wrap:anywhere; }
+        .context-menu { border:1px solid #eee9f7; border-radius:15px; padding:7px; box-shadow:0 16px 48px #21133d2b; backdrop-filter:blur(15px); }
+        .context-menu-item { border-radius:9px; padding:10px 12px; }
+        .context-menu-item:hover { background:#f1edff; }
+        .sidebar-footer { margin-top:auto; }
+        @media(max-width:700px) { .mac-window { width:100vw; height:100dvh; margin:0; border-radius:0; } }
+        @media(max-width:520px) { .sidebar { display:flex; width:42%; flex-basis:42%; min-width:135px; } .sidebar-header { padding:14px 8px 8px; } .sidebar-header h2 { font-size:1rem; } .sidebar-search { padding:9px 7px; font-size:.75rem; } .chat-list-item { padding:8px 5px; gap:6px; } .list-avatar { width:32px; min-width:32px; height:32px; } .chat-time { display:none; } .chat-preview { font-size:.68rem; } .sidebar-action { padding:9px 6px; font-size:.68rem; } .sidebar-account-row { gap:5px; } .account-copy span { display:none; } .account-menu-button { padding:4px; } .chat-header { padding:0 9px; } .chat-header-actions { gap:0; } .messages-container { padding:12px 8px; } }
+
+
+        /* BLUE THEME OVERRIDE — replaces the remaining purple/violet styling. */
+        :root {
+            --bg-color:#eef5ff;
+            --sidebar-bg:#f5f9ff;
+            --sidebar-border:rgba(0,122,255,.16);
+            --header-border:rgba(0,122,255,.14);
+            --text-secondary:#718096;
+            --msg-sent-bg:linear-gradient(135deg,#1684ff 0%,#0066dd 100%);
+            --msg-received-bg:#edf4ff;
+            --msg-received-text:#203047;
+            --input-bg:#f5f9ff;
+            --input-border:#d9e8fb;
+            --hover-bg:#eaf3ff;
+            --active-chat-bg:linear-gradient(135deg,#1684ff 0%,#0066dd 100%);
+            --primary:#007aff;
+            --convo-accent:#007aff;
+            --convo-accent-2:#55a5ff;
+        }
+        [data-theme="dark"] {
+            --bg-color:#0b1220;
+            --container-bg:#101b2d;
+            --sidebar-bg:#0d1728;
+            --sidebar-border:rgba(86,161,255,.18);
+            --chat-bg:#101b2d;
+            --header-bg:rgba(16,27,45,.92);
+            --header-border:rgba(86,161,255,.16);
+            --text-color:#edf5ff;
+            --text-secondary:#9bb1cc;
+            --msg-sent-bg:linear-gradient(135deg,#258cff 0%,#0066dd 100%);
+            --msg-received-bg:#1a2a40;
+            --msg-received-text:#edf5ff;
+            --input-bg:#142238;
+            --input-border:#29415e;
+            --input-text:#edf5ff;
+            --hover-bg:#1b304b;
+            --active-chat-bg:linear-gradient(135deg,#258cff 0%,#0066dd 100%);
+            --primary:#55a5ff;
+        }
+        * { scrollbar-color:rgba(0,122,255,.32) transparent; }
+        body { background:radial-gradient(ellipse at 18% 0%,#e1efff 0%,#f4f8ff 42%,#edf5ff 100%); }
+        .mac-window { border-color:rgba(0,102,221,.17); box-shadow:0 35px 110px rgba(18,75,145,.16),0 2px 8px rgba(18,75,145,.05); }
+        .sidebar { background:linear-gradient(180deg,#fbfdff 0%,#f0f6ff 100%); border-right-color:rgba(0,102,221,.14); }
+        .sidebar-header h2::before { background:linear-gradient(135deg,#1684ff,#005ac1); box-shadow:0 3px 10px #1684ff44; }
+        .chat-list-item:hover { background:#edf5ff; }
+        .chat-list-item.active { background:linear-gradient(110deg,#dcecff,#edf5ff); border-color:#c5ddff; color:#123f78; }
+        .chat-list-item.active .chat-preview,.chat-list-item.active .chat-time { color:#477dbb; }
+        .list-avatar,.account-avatar,.auth-brand-mark { background:linear-gradient(135deg,#1684ff,#005ac1); box-shadow:0 7px 16px #1684ff2b; }
+        .sidebar-action { border-color:#d9e8fb; color:#334d6b; }
+        .sidebar-action:hover { border-color:#a9ceff; box-shadow:0 7px 18px #1677ff12; }
+        .sidebar-action span,.account-menu-button { color:#287ed8; }
+        .sidebar-action.primary,#loginBtn { background:linear-gradient(135deg,#1684ff,#005ac1); box-shadow:0 8px 18px #1677ff2b; }
+        .sidebar-account-row { border-top-color:#dce9f8; }
+        #setupScreen { background:radial-gradient(ellipse at 50% 10%,#e1efff 0%,#f7faff 48%,#edf5ff 100%); }
+        #setupScreen h1 { background:linear-gradient(120deg,#1684ff,#005ac1); -webkit-background-clip:text; background-clip:text; }
+        .auth-box { border-color:#e0ecfb; box-shadow:0 18px 60px #164b8312; }
+        .chat-pane { background:linear-gradient(180deg,#fff 0%,#fbfdff 100%); }
+        .messages-container { background:radial-gradient(ellipse at 50% 0%,#fff 0%,#fbfdff 72%,#f6faff 100%); }
+        .message-wrapper.sent .bubble { background:linear-gradient(135deg,#1684ff,#0066dd); box-shadow:0 5px 15px #1677ff22; }
+        .message-wrapper.received .bubble { border-color:#e0ecfb; background:#fff; }
+        .chat-pane.convo-drop-active { outline-color:#1684ff; background:#f0f7ff; }
+        .chat-pane.convo-drop-active::after { background:#0066dd; box-shadow:0 12px 30px #005ac133; }
+        .input-bar-container { border-top-color:#e0ecfb; }
+        .input-bar { border-color:#dfeafb; box-shadow:0 5px 20px #164b8308; }
+        .plus-btn:hover { background:#eaf3ff; }
+        .send-arrow-btn { background:linear-gradient(135deg,#1684ff,#005ac1); box-shadow:0 4px 10px #1677ff35; }
+        .ios-btn { background:linear-gradient(135deg,#1684ff,#005ac1); box-shadow:0 7px 17px #1677ff22; }
+        .ios-btn:hover { box-shadow:0 10px 22px #1677ff2b; }
+        .sidebar-search:focus,.input-wrapper input:focus,.convo-dialog input:focus { border-color:#78b5ff; box-shadow:0 0 0 4px #1677ff18; }
+        .convo-dialog input:not([type=checkbox]) { border-color:#d9e8fb; }
+        .dialog-kicker { color:#1677d8; }
+        .settings-check input { accent-color:#007aff; }
+        .invite-code-row code { background:#edf5ff; color:#1558a6; }
+        .detail-list-item { background:#f0f6ff; color:#334d6b; }
+        .context-menu { border-color:#e0ecfb; }
+        .context-menu-item:hover { background:#eaf3ff; }
+        #connectionStatus::before { background:#1684ff; }
+        [data-theme="dark"] body { background:radial-gradient(ellipse at 18% 0%,#102847 0%,#0b1220 45%,#0d192b 100%); }
+        [data-theme="dark"] .sidebar { background:linear-gradient(180deg,#0e1a2b 0%,#0b1525 100%); }
+        [data-theme="dark"] .chat-list-item:hover { background:#172a42; }
+        [data-theme="dark"] .chat-list-item.active { background:linear-gradient(110deg,#123b67,#183354); border-color:#28568a; color:#eaf4ff; }
+        [data-theme="dark"] .chat-list-item.active .chat-preview,[data-theme="dark"] .chat-list-item.active .chat-time { color:#a7d0ff; }
+        [data-theme="dark"] .sidebar-action { background:#142238; border-color:#29415e; color:#d7e8fc; }
+        [data-theme="dark"] .sidebar-account-row { border-top-color:#29415e; }
+        [data-theme="dark"] #setupScreen { background:radial-gradient(ellipse at 50% 10%,#142e4d 0%,#101b2d 52%,#0b1220 100%); }
+        [data-theme="dark"] .auth-box { background:#142238; border-color:#29415e; }
+        [data-theme="dark"] .chat-pane,[data-theme="dark"] .messages-container { background:linear-gradient(180deg,#101b2d 0%,#0f1a2b 100%); }
+        [data-theme="dark"] .message-wrapper.received .bubble { background:#1a2a40; border-color:#29415e; }
+        [data-theme="dark"] .input-bar { background:#142238; border-color:#29415e; }
+        [data-theme="dark"] .plus-btn:hover,[data-theme="dark"] .context-menu-item:hover { background:#1b304b; }
+        [data-theme="dark"] .convo-dialog input:not([type=checkbox]),[data-theme="dark"] .detail-list-item { background:#142238; border-color:#29415e; color:#edf5ff; }
+        [data-theme="dark"] .invite-code-row code { background:#1a2a40; color:#a7d0ff; }
+
     </style>
+
+    <style id="convo-blue-finish">
+      :root {
+        --bg-color:#f1f7ff; --sidebar-bg:#f5f9ff; --sidebar-border:rgba(22,119,255,.16);
+        --header-border:rgba(22,119,255,.14); --text-secondary:#71839c; --msg-received-bg:#edf4fc;
+        --msg-received-text:#172b45; --input-bg:#f7fbff; --input-border:#d9e8fb; --hover-bg:#eaf3ff;
+        --primary:#1677ff; --active-chat-bg:linear-gradient(135deg,#1684ff,#005ac1);
+      }
+      [data-theme="dark"] {
+        --bg-color:#0b1220; --container-bg:#101b2d; --sidebar-bg:#0e1a2b; --sidebar-border:rgba(100,170,255,.18);
+        --chat-bg:#101b2d; --header-bg:rgba(16,27,45,.92); --header-border:rgba(100,170,255,.16);
+        --text-color:#edf5ff; --text-secondary:#9bb0ca; --msg-received-bg:#1a2a40; --msg-received-text:#edf5ff;
+        --input-bg:#142238; --input-border:#29415e; --input-text:#edf5ff; --hover-bg:#172a42;
+        --primary:#4da3ff; --active-chat-bg:linear-gradient(135deg,#1684ff,#005ac1);
+      }
+      body { background:radial-gradient(ellipse at 12% 5%,rgba(22,132,255,.13),transparent 34%),radial-gradient(ellipse at 90% 95%,rgba(75,163,255,.10),transparent 32%),var(--bg-color); }
+      .mac-window { border-color:rgba(22,119,255,.18); box-shadow:0 30px 90px rgba(20,70,130,.13),0 5px 20px rgba(20,70,130,.05); }
+      .chat-list-item.active { background:linear-gradient(120deg,#e4f1ff,#f1f8ff); border-color:#c6e0ff; color:#123d70; box-shadow:0 8px 18px rgba(22,119,255,.12); }
+      .chat-list-item.active .chat-preview,.chat-list-item.active .chat-time { color:#477dbb; }
+      .list-avatar,.account-avatar,.auth-brand-mark { background:linear-gradient(135deg,#1684ff,#005ac1); box-shadow:0 7px 16px #1684ff2b; }
+      .sidebar-header h2::before { background:linear-gradient(140deg,#66adff,#007aff); box-shadow:0 5px 12px rgba(22,119,255,.22); }
+      .sidebar-action span,.account-menu-button { color:#287ed8; }
+      .sidebar-action:hover { border-color:#a9ceff; box-shadow:0 7px 18px #1677ff12; }
+      .ios-btn,.sidebar-action.primary,#loginBtn { background:linear-gradient(135deg,#1684ff,#005ac1); box-shadow:0 7px 17px #1677ff22; }
+      #setupScreen { background:radial-gradient(ellipse at 50% 10%,#e1efff 0%,#f7faff 48%,#edf5ff 100%); }
+      #setupScreen h1 { background:linear-gradient(120deg,#1684ff,#005ac1); -webkit-background-clip:text; background-clip:text; }
+      .message-wrapper.sent .bubble { background:linear-gradient(135deg,#1684ff,#0066dd); box-shadow:0 5px 15px #1677ff22; }
+      .input-wrapper input:focus,.sidebar-search:focus { border-color:#78b5ff; box-shadow:0 0 0 4px #1677ff18; }
+      [data-theme="dark"] .chat-list-item.active { background:linear-gradient(110deg,#123b67,#183354); border-color:#28568a; color:#eaf4ff; }
+      [data-theme="dark"] .chat-list-item.active .chat-preview,[data-theme="dark"] .chat-list-item.active .chat-time { color:#a7d0ff; }
+    </style>
+
 </head>
 
 <body>
@@ -1075,8 +1487,9 @@
     <div id="setupScreen">
 
         <div>
-            <h1>Messages</h1>
-            <p>Sign in with your Apple ID or local profile</p>
+            <div class="auth-brand-mark">C</div>
+            <h1>Welcome to Convo</h1>
+            <p>Your people. Your spaces. All in one place.</p>
         </div>
 
         <div class="auth-box" id="authBoxSection">
@@ -1084,7 +1497,7 @@
             <input
                 type="text"
                 id="authUsername"
-                placeholder="Apple ID / Username"
+                placeholder="Username"
                 autocomplete="off"
             >
 
@@ -1195,7 +1608,9 @@
 
                 <input
                     class="sidebar-search"
-                    placeholder="Search"
+                    id="sidebarSearchInput"
+                    placeholder="Search chats and messages"
+                    aria-label="Search chats and messages"
                 >
 
             </div>
@@ -1244,16 +1659,15 @@
 
             </div>
 
-            <div class="sidebar-footer">
-
-                <button
-                    class="ios-btn ios-btn-secondary"
-                    id="leaveConversationBtn"
-                    style="font-size:.8rem;padding:8px;"
-                >
-                    Switch Rooms / Home
-                </button>
-
+            <div class="sidebar-footer convo-sidebar-actions">
+                <button class="sidebar-action primary" id="sidebarCreatePrivateBtn"><span>＋</span> Create private chat</button>
+                <button class="sidebar-action" id="sidebarJoinPrivateBtn"><span>↗</span> Join private chat</button>
+                <div class="sidebar-account-row">
+                    <div class="account-avatar" id="sidebarAccountAvatar">C</div>
+                    <div class="account-copy"><strong id="sidebarAccountName">Your account</strong><span>Convo account</span></div>
+                    <button class="account-menu-button" id="sidebarSettingsBtn" title="Settings" aria-label="Settings">⚙</button><button class="account-menu-button" id="sidebarLogoutBtn" title="Sign out" aria-label="Sign out">⋯</button>
+                </div>
+                <button class="legacy-hidden-control" id="leaveConversationBtn" type="button">Switch Rooms / Home</button>
             </div>
 
         </div>
@@ -1343,7 +1757,7 @@
                 <div class="message-wrapper system">
 
                     <div class="bubble system">
-                        Welcome to Apple Messages web client.
+                        Welcome to Convo. Start a conversation.
                     </div>
 
                 </div>
@@ -1419,7 +1833,7 @@
                         <input
                             type="text"
                             id="messageInput"
-                            placeholder="iMessage"
+                            placeholder="Write a message…"
                             autocomplete="off"
                         >
 
@@ -1476,7 +1890,7 @@
             </div>
 
             <div class="incoming-call-type">
-                FaceTime video
+                Video call
             </div>
 
         </div>
@@ -1574,6 +1988,8 @@
         ↩ Reply
     </div>
 
+    <div class="context-menu-item" id="ctxMenuEdit">✎ Edit message</div>
+    <div class="context-menu-item" id="ctxMenuPin">📌 Pin / unpin message</div>
     <div
         class="context-menu-item"
         id="ctxMenuSender"
@@ -1593,7 +2009,7 @@
     <div class="modal">
 
         <h3>
-            Apple ID Profile
+            Your Profile
         </h3>
 
         <div
@@ -1686,10 +2102,10 @@
             Active Participants Online:
         </p>
 
-        <div
-            id="participantsListContainer"
-            style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;"
-        ></div>
+        <div id="participantsListContainer" style="max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;"></div>
+        <div class="detail-section"><strong>Invitation code</strong><div class="invite-code-row"><code id="detailsInviteCode">—</code><button class="ios-btn ios-btn-secondary" id="copyInviteCodeBtn" type="button">Copy</button></div></div>
+        <div class="detail-section"><strong>Pinned messages</strong><div id="pinnedMessagesContainer" class="detail-list">No pinned messages yet.</div></div>
+        <div class="detail-section"><strong>Shared files</strong><div id="sharedFilesContainer" class="detail-list">No shared files yet.</div></div>
 
         <button
             class="ios-btn ios-btn-secondary"
@@ -1700,6 +2116,45 @@
 
     </div>
 
+</div>
+
+
+<!-- CONVO WORKSPACE DIALOGS -->
+<div class="modal-overlay hidden" id="roomCreateModal" role="dialog" aria-modal="true" aria-labelledby="roomCreateTitle">
+  <div class="modal convo-dialog">
+    <div class="dialog-kicker">NEW CONVERSATION</div>
+    <h3 id="roomCreateTitle">Create a private chat</h3>
+    <p class="dialog-description">Give your room a name. You can share its invitation code with the people you want to join.</p>
+    <label for="newRoomNameInput">Chat name</label>
+    <input id="newRoomNameInput" maxlength="48" placeholder="e.g. Weekend plans" autocomplete="off">
+    <div class="dialog-actions">
+      <button class="ios-btn ios-btn-secondary" id="cancelCreateRoomBtn" type="button">Cancel</button>
+      <button class="ios-btn" id="confirmCreateRoomBtn" type="button">Create chat</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="roomJoinModal" role="dialog" aria-modal="true" aria-labelledby="roomJoinTitle">
+  <div class="modal convo-dialog">
+    <div class="dialog-kicker">JOIN CONVERSATION</div>
+    <h3 id="roomJoinTitle">Join a private chat</h3>
+    <p class="dialog-description">Paste the invitation code from the person who created the room.</p>
+    <label for="roomJoinCodeInput">Invitation code</label>
+    <input id="roomJoinCodeInput" placeholder="Paste invitation code…" autocomplete="off">
+    <div class="dialog-actions">
+      <button class="ios-btn ios-btn-secondary" id="cancelJoinRoomBtn" type="button">Cancel</button>
+      <button class="ios-btn" id="confirmJoinRoomBtn" type="button">Join chat</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay hidden" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="modal convo-dialog">
+    <div class="dialog-kicker">PREFERENCES</div>
+    <h3 id="settingsTitle">Convo settings</h3>
+    <div class="settings-option"><div><strong>Appearance</strong><span>Switch between light and dark mode</span></div><button class="ios-btn ios-btn-secondary" id="settingsThemeBtn" type="button">Toggle theme</button></div>
+    <label class="settings-check"><input id="desktopNotificationsToggle" type="checkbox"> Enable desktop notifications</label>
+    <p class="dialog-description">Notifications require browser permission. Message history is stored by each room host and on this device; rooms cannot retrieve history while the host is offline.</p>
+    <div class="dialog-actions"><button class="ios-btn" id="closeSettingsBtn" type="button">Done</button></div>
+  </div>
 </div>
 
 <script>
@@ -1727,6 +2182,58 @@
 
     let activeReplyingMessage = null;
     let contextTargetMessageId = null;
+    let convoRooms = [];
+    let activeRoomId = 'public';
+    let visibleRoomId = 'public';
+    let switchingRoom = false;
+
+    // Every room owns an independent PeerJS session and its own packet/history state.
+    const roomSessions = new Map();
+    const roomBoundObjects = new WeakSet();
+    function captureRoomSession() {
+        return { peer, isHost, connections, hostConnection, onlineUsersMap, messageLog };
+    }
+    function restoreRoomSession(session) {
+        peer = session?.peer || null;
+        isHost = !!session?.isHost;
+        connections = session?.connections || [];
+        hostConnection = session?.hostConnection || null;
+        onlineUsersMap = session?.onlineUsersMap || new Map();
+        messageLog = session?.messageLog || [];
+    }
+    function saveRoomSession(roomId = activeRoomId) {
+        if (roomId) roomSessions.set(roomId, captureRoomSession());
+    }
+    function bindEventsToRoom(object, roomId) {
+        if (!object || roomBoundObjects.has(object) || typeof object.on !== 'function') return object;
+        roomBoundObjects.add(object);
+        const originalOn = object.on.bind(object);
+        object.on = (eventName, callback) => originalOn(eventName, (...args) =>
+            runInRoomSession(roomId, () => callback(...args))
+        );
+        return object;
+    }
+    function createRoomPeer(...args) {
+        return bindEventsToRoom(new Peer(...args), activeRoomId);
+    }
+    function runInRoomSession(roomId, callback) {
+        if (!roomId || roomId === activeRoomId) return callback();
+        const previousRoomId = activeRoomId;
+        const previousSession = captureRoomSession();
+        if (previousRoomId) roomSessions.set(previousRoomId, previousSession);
+        restoreRoomSession(roomSessions.get(roomId));
+        activeRoomId = roomId;
+        try {
+            return callback();
+        } finally {
+            roomSessions.set(roomId, captureRoomSession());
+            restoreRoomSession(previousSession);
+            activeRoomId = previousRoomId;
+        }
+    }
+    let contextTargetPacket = null;
+    let pinnedMessages = [];
+    let editingMessageId = null;
 
     const PUBLIC_ROOM_PREFIX =
         'xchat_apple_messages_2026';
@@ -1825,6 +2332,29 @@
         document.getElementById(
             'leaveConversationBtn'
         );
+
+    const chatListContainer = document.getElementById('chatListContainer');
+    const sidebarCreatePrivateBtn = document.getElementById('sidebarCreatePrivateBtn');
+    const sidebarJoinPrivateBtn = document.getElementById('sidebarJoinPrivateBtn');
+    const sidebarLogoutBtn = document.getElementById('sidebarLogoutBtn');
+    const sidebarAccountName = document.getElementById('sidebarAccountName');
+    const sidebarAccountAvatar = document.getElementById('sidebarAccountAvatar');
+    const sidebarSearchInput = document.getElementById('sidebarSearchInput');
+    const sidebarSettingsBtn = document.getElementById('sidebarSettingsBtn');
+    const roomCreateModal = document.getElementById('roomCreateModal');
+    const newRoomNameInput = document.getElementById('newRoomNameInput');
+    const cancelCreateRoomBtn = document.getElementById('cancelCreateRoomBtn');
+    const confirmCreateRoomBtn = document.getElementById('confirmCreateRoomBtn');
+    const roomJoinModal = document.getElementById('roomJoinModal');
+    const roomJoinCodeInput = document.getElementById('roomJoinCodeInput');
+    const cancelJoinRoomBtn = document.getElementById('cancelJoinRoomBtn');
+    const confirmJoinRoomBtn = document.getElementById('confirmJoinRoomBtn');
+    const settingsModal = document.getElementById('settingsModal');
+    const settingsThemeBtn = document.getElementById('settingsThemeBtn');
+    const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+    const desktopNotificationsToggle = document.getElementById('desktopNotificationsToggle');
+    const ctxMenuEdit = document.getElementById('ctxMenuEdit');
+    const ctxMenuPin = document.getElementById('ctxMenuPin');
 
     const roomTitleDisplay =
         document.getElementById(
@@ -1965,6 +2495,10 @@
         document.getElementById(
             'participantsListContainer'
         );
+    const detailsInviteCode = document.getElementById('detailsInviteCode');
+    const copyInviteCodeBtn = document.getElementById('copyInviteCodeBtn');
+    const pinnedMessagesContainer = document.getElementById('pinnedMessagesContainer');
+    const sharedFilesContainer = document.getElementById('sharedFilesContainer');
 
     const bubbleContextMenu =
         document.getElementById(
@@ -2168,14 +2702,20 @@
             'hidden'
         );
 
-        chatSelectorSection.classList.remove(
-            'hidden'
-        );
-
-        loggedInUserDisplay.innerText =
-            `Signed in as ${currentUser.displayName}`;
-
+        chatSelectorSection.classList.add('hidden');
+        privateCreationSection.classList.add('hidden');
+        setupScreen.style.display = 'none';
+        loggedInUserDisplay.innerText = `Signed in as ${currentUser.displayName}`;
+        sidebarAccountName.innerText = currentUser.displayName || currentUser.username;
+        sidebarAccountAvatar.innerText = (currentUser.displayName || currentUser.username || 'C').charAt(0).toUpperCase();
         updateUserAvatarUI();
+        const savedRooms = localStorage.getItem('xchat_rooms_' + currentUser.username);
+        try { convoRooms = savedRooms ? JSON.parse(savedRooms) : []; } catch { convoRooms = []; }
+        if (!Array.isArray(convoRooms)) convoRooms = [];
+        if (!convoRooms.some(r => r.id === 'public')) convoRooms.unshift({id:'public', type:'public', name:'Main chat', code:PUBLIC_ROOM_PREFIX, creator:false, unread:0, lastMessage:'', pinned:[]});
+        convoRooms = convoRooms.map(r => ({unread:0,lastMessage:'',pinned:[],...r}));
+        renderConversationList();
+        activateConversation(convoRooms.find(r => r.id === 'public'), true);
 
     }
 
@@ -2233,8 +2773,9 @@
                 'hidden'
             );
 
-            setupScreen.style.display =
-                'flex';
+            setupScreen.style.display = 'flex';
+            convoRooms = [];
+            activeRoomId = 'public';
 
         }
     );
@@ -2383,6 +2924,24 @@
     );
 
 
+    sidebarSettingsBtn?.addEventListener('click', () => {
+        desktopNotificationsToggle.checked = localStorage.getItem('xchat_desktop_notifications') === 'true';
+        settingsModal.classList.remove('hidden');
+    });
+    closeSettingsBtn?.addEventListener('click', () => settingsModal.classList.add('hidden'));
+    settingsThemeBtn?.addEventListener('click', () => themeToggleBtn.click());
+    desktopNotificationsToggle?.addEventListener('change', async () => {
+        if (desktopNotificationsToggle.checked && 'Notification' in window) {
+            try { const permission = await Notification.requestPermission(); localStorage.setItem('xchat_desktop_notifications', String(permission === 'granted')); desktopNotificationsToggle.checked = permission === 'granted'; }
+            catch { desktopNotificationsToggle.checked = false; }
+        } else localStorage.setItem('xchat_desktop_notifications', 'false');
+    });
+    copyInviteCodeBtn?.addEventListener('click', async () => {
+        const room = convoRooms.find(r => r.id === activeRoomId); if (!room || room.type !== 'private') return;
+        try { await navigator.clipboard.writeText(room.code); copyInviteCodeBtn.textContent = 'Copied'; setTimeout(() => copyInviteCodeBtn.textContent = 'Copy', 1200); }
+        catch { prompt('Copy this invitation code:', room.code); }
+    });
+
     /*
      * =========================================================
      * THEME
@@ -2417,120 +2976,252 @@
      * =========================================================
      */
 
-    joinPublicBtn.addEventListener(
-        'click',
-        () => {
-
-            setupScreen.style.display =
-                'none';
-
-            roomTitleDisplay.innerText =
-                'Public Chat Lobby';
-
-            sidebarRoomLabel.innerText =
-                'Public Chat Lobby';
-
-            initPublicPeerConnection();
-
+    function persistConversationList() {
+        if (currentUser && currentUser.username) {
+            localStorage.setItem('xchat_rooms_' + currentUser.username, JSON.stringify(convoRooms));
         }
-    );
+    }
 
-
-    openPrivateOptionsBtn.addEventListener(
-        'click',
-        () => {
-
-            chatSelectorSection.classList.add(
-                'hidden'
-            );
-
-            privateCreationSection.classList.remove(
-                'hidden'
-            );
-
-        }
-    );
-
-
-    backToMenuBtn.addEventListener(
-        'click',
-        () => {
-
-            privateCreationSection.classList.add(
-                'hidden'
-            );
-
-            chatSelectorSection.classList.remove(
-                'hidden'
-            );
-
-        }
-    );
-
-
-    createPrivateBtn.addEventListener(
-        'click',
-        () => {
-
-            setupScreen.style.display =
-                'none';
-
-            roomTitleDisplay.innerText =
-                'Secure Conversation';
-
-            sidebarRoomLabel.innerText =
-                'Secure Room';
-
-            const room =
-                'imsg_priv_' +
-                Math.random()
-                    .toString(36)
-                    .substring(2, 9);
-
-            initPeerConnection(
-                room,
-                true,
-                true
-            );
-
-        }
-    );
-
-
-    joinPrivateBtn.addEventListener(
-        'click',
-        () => {
-
-            const room =
-                joinCodeInput.value.trim();
-
-            if (!room) {
-
-                alert(
-                    'Enter invitation code.'
-                );
-
-                return;
-
+    function roomHistoryStorageKey(roomId, host = false) {
+        return `xchat_${host ? 'host_' : 'history_'}${roomId}`;
+    }
+    function persistRoomHistory(roomId = activeRoomId, asHost = isHost) {
+        try {
+            const room = convoRooms.find(r => r.id === roomId);
+            const history = (messageLog || []).filter(m => m && ['CHAT','FILE','SYSTEM'].includes(m.type)).slice(-500);
+            localStorage.setItem(roomHistoryStorageKey(roomId, false), JSON.stringify(history));
+            if (asHost) localStorage.setItem(roomHistoryStorageKey(roomId, true), JSON.stringify(history));
+            if (room) {
+                room.lastMessage = history.length ? (history[history.length - 1].text || history[history.length - 1].fileName || 'Attachment') : room.lastMessage;
+                persistConversationList();
             }
-
-            setupScreen.style.display =
-                'none';
-
-            roomTitleDisplay.innerText =
-                'Secure Conversation';
-
-            sidebarRoomLabel.innerText =
-                'Secure Room';
-
-            initPeerConnection(
-                room,
-                false,
-                false
-            );
-
+        } catch (err) { console.warn('Could not save room history', err); }
+    }
+    function readStoredHistory(roomId, host = false) {
+        try { const value = JSON.parse(localStorage.getItem(roomHistoryStorageKey(roomId, host)) || '[]'); return Array.isArray(value) ? value : []; }
+        catch { return []; }
+    }
+    function packetIdentity(packet) { return packet?.id || `${packet?.type}_${packet?.sender?.username}_${packet?.time}_${packet?.text || packet?.fileName || ''}`; }
+    function mergeHistoryPackets(packets) {
+        const map = new Map();
+        [...(messageLog || []), ...(Array.isArray(packets) ? packets : [])].forEach(packet => { if (packet && ['CHAT','FILE','SYSTEM'].includes(packet.type)) map.set(packetIdentity(packet), packet); });
+        messageLog = [...map.values()].sort((a,b) => (a.timestamp || 0) - (b.timestamp || 0)).slice(-500);
+        if (activeRoomId === visibleRoomId) {
+            messagesBox.innerHTML = '<div class="date-divider">Conversation history</div>';
+            messageLog.forEach(packet => {
+                if (packet.type === 'CHAT') appendMessage(packet, packet.sender?.username === currentUser.username ? 'sent' : 'received');
+                else if (packet.type === 'FILE') appendFileMessage(packet, packet.sender?.username === currentUser.username ? 'sent' : 'received');
+                else if (packet.type === 'SYSTEM') appendSystemMessage(packet.text || '');
+            });
         }
-    );
+        persistRoomHistory(activeRoomId, isHost);
+    }
+    function saveLocalHistory(roomId) {
+        try { localStorage.setItem(roomHistoryStorageKey(roomId, false), JSON.stringify((messageLog || []).filter(m => m && ['CHAT','FILE','SYSTEM'].includes(m.type)).slice(-500))); } catch {}
+    }
+    // Browser-tab unread counter: favicon badge + title, independent of the selected chat.
+    let convoTabUnreadCount = 0;
+    const convoBaseTitle = 'Convo — Premium Messaging';
+    function updateConvoTabBadge() {
+        const icon = document.getElementById('convoFavicon');
+        const count = Math.max(0, convoTabUnreadCount);
+        const badge = count > 99 ? '99+' : String(count);
+        const svg = count > 0
+          ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="3" y="3" width="58" height="58" rx="17" fill="#087cff"/><path d="M17 19h30v21H31l-9 7v-7h-5z" fill="white"/><circle cx="46" cy="17" r="15" fill="#ff3b30" stroke="white" stroke-width="3"/><text x="46" y="22" font-family="Arial,sans-serif" font-size="12" font-weight="700" text-anchor="middle" fill="white">${badge}</text></svg>`
+          : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="3" y="3" width="58" height="58" rx="17" fill="#087cff"/><path d="M17 19h30v21H31l-9 7v-7h-5z" fill="white"/></svg>';
+        if (icon) icon.href = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        document.title = count > 0 ? `(${count > 99 ? '99+' : count}) ${convoBaseTitle}` : convoBaseTitle;
+    }
+    function clearConvoTabUnread() {
+        if (!document.hidden && convoTabUnreadCount) {
+            convoTabUnreadCount = 0;
+            updateConvoTabBadge();
+        }
+    }
+    document.addEventListener('visibilitychange', clearConvoTabUnread);
+    window.addEventListener('focus', clearConvoTabUnread);
+    updateConvoTabBadge();
+
+    function notifyNewMessage(packet) {
+        if (!packet || packet.sender?.username === currentUser.username) return;
+        if (document.hidden) {
+            convoTabUnreadCount += 1;
+            updateConvoTabBadge();
+        }
+        if (document.hidden && localStorage.getItem('xchat_desktop_notifications') === 'true' && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification(packet.sender?.displayName || 'New message', { body: packet.text || packet.fileName || 'Sent an attachment' });
+        }
+    }
+
+    function deletePrivateConversation(room) {
+        if (!room || room.type !== 'private') return;
+        const label = room.name || 'this private chat';
+        if (!confirm(`Delete "${label}" from your chat list? This removes its saved history on this device.`)) return;
+        const wasVisibleRoom = room.id === visibleRoomId;
+        const roomSession = roomSessions.get(room.id);
+        if (roomSession?.peer) { try { roomSession.peer.destroy(); } catch (err) { console.warn('Chat cleanup failed', err); } }
+        roomSessions.delete(room.id);
+        if (room.id === visibleRoomId) {
+            visibleRoomId = 'public';
+            activeRoomId = 'public';
+            restoreRoomSession(roomSessions.get('public'));
+            window.__convoRoomHtml = false;
+        }
+        convoRooms = convoRooms.filter(r => r.id !== room.id);
+        try {
+            localStorage.removeItem(roomHistoryStorageKey(room.id, false));
+            localStorage.removeItem(roomHistoryStorageKey(room.id, true));
+        } catch (err) { console.warn('Could not remove saved chat history', err); }
+        persistConversationList();
+        renderConversationList();
+        if (wasVisibleRoom) {
+            const publicRoom = convoRooms.find(r => r.id === 'public');
+            if (publicRoom) activateConversation(publicRoom, true);
+            else {
+                activeRoomId = '';
+                messagesBox.innerHTML = '<div class="date-divider">Choose a conversation to get started</div>';
+            }
+        }
+    }
+
+    function renderConversationList() {
+        if (!chatListContainer) return;
+        chatListContainer.innerHTML = '';
+        const query = (sidebarSearchInput?.value || '').trim().toLowerCase();
+        convoRooms.forEach(room => {
+            const localHistory = readStoredHistory(room.id, false);
+            const matchingMessage = query ? [...localHistory].reverse().find(m => (m.text || m.fileName || '').toLowerCase().includes(query)) : null;
+            const haystack = `${room.name || ''} ${room.lastMessage || ''}`.toLowerCase();
+            if (query && !haystack.includes(query) && !matchingMessage) return;
+            const item = document.createElement('div');
+            item.className = 'chat-list-item' + (room.id === activeRoomId ? ' active' : '');
+            item.dataset.roomId = room.id;
+            const avatar = document.createElement('div');
+            avatar.className = 'list-avatar';
+            avatar.textContent = room.type === 'public' ? '🌐' : '🔒';
+            const info = document.createElement('div'); info.className = 'chat-list-info';
+            const top = document.createElement('div'); top.className = 'chat-list-top';
+            const name = document.createElement('span'); name.className = 'chat-name'; name.textContent = room.name;
+            const time = document.createElement('span'); time.className = 'chat-time'; time.textContent = room.unread ? `${room.unread} new` : (room.type === 'public' ? 'PUBLIC' : 'PRIVATE');
+            const preview = document.createElement('div'); preview.className = 'chat-preview'; preview.textContent = matchingMessage ? `Match: ${matchingMessage.text || matchingMessage.fileName}` : (room.lastMessage || (room.type === 'public' ? 'Public conversation' : `Private · ${room.code || ''}`));
+            top.append(name,time); info.append(top,preview); item.append(avatar,info);
+            item.addEventListener('click', () => activateConversation(room));
+            if (room.type === 'private') {
+                item.title = 'Right-click to delete this private chat';
+                item.addEventListener('contextmenu', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    deletePrivateConversation(room);
+                });
+            }
+            chatListContainer.appendChild(item);
+        });
+    }
+    sidebarSearchInput?.addEventListener('input', renderConversationList);
+
+    function activateConversation(room, firstLogin = false) {
+        if (!room || switchingRoom) return;
+        if (room.id === visibleRoomId && !firstLogin) return;
+        switchingRoom = true;
+        if (visibleRoomId) {
+            const old = convoRooms.find(r => r.id === visibleRoomId);
+            if (old && messagesBox) old.cachedHtml = messagesBox.innerHTML;
+            saveRoomSession(visibleRoomId);
+        }
+
+        // Change the visible conversation only. Existing room peers remain connected.
+        visibleRoomId = room.id;
+        activeRoomId = room.id;
+        restoreRoomSession(roomSessions.get(room.id));
+        room.unread = 0;
+        renderConversationList();
+        setupScreen.style.display = 'none';
+        roomTitleDisplay.innerText = room.name;
+        sidebarRoomLabel.innerText = room.name;
+        const localHistory = readStoredHistory(room.id, false);
+        messageLog = localHistory;
+        const session = roomSessions.get(room.id);
+        if (session) session.messageLog = localHistory;
+        messagesBox.innerHTML = '<div class="date-divider">Conversation history</div>';
+        localHistory.forEach(packet => {
+            if (packet.type === 'CHAT') appendMessage(packet, packet.sender?.username === currentUser.username ? 'sent' : 'received');
+            else if (packet.type === 'FILE') appendFileMessage(packet, packet.sender?.username === currentUser.username ? 'sent' : 'received');
+            else if (packet.type === 'SYSTEM') appendSystemMessage(packet.text || '');
+        });
+        if (!roomSessions.has(room.id) || !peer) {
+            if (room.type === 'public') initPublicPeerConnection();
+            else initPeerConnection(room.code, !!room.creator, !!room.creator);
+        }
+        saveRoomSession(room.id);
+        window.__convoRoomHtml = true;
+        persistConversationList();
+        window.setTimeout(() => { switchingRoom = false; }, 100);
+    }
+
+    joinPublicBtn.addEventListener('click', () => {
+        const room = convoRooms.find(r => r.id === 'public');
+        if (room) activateConversation(room);
+    });
+
+    openPrivateOptionsBtn.addEventListener('click', () => {
+        const code = prompt('Enter the invitation code to join a private chat, or choose Cancel to create one.');
+        if (code && code.trim()) addPrivateConversation(code.trim(), false);
+        else if (code === '') alert('Please enter an invitation code.');
+    });
+
+    backToMenuBtn.addEventListener('click', () => {
+        privateCreationSection.classList.add('hidden');
+        chatSelectorSection.classList.add('hidden');
+        setupScreen.style.display = 'none';
+    });
+
+    function addPrivateConversation(code, creator, roomName = '') {
+        const id = 'private_' + code;
+        let room = convoRooms.find(r => r.id === id);
+        if (!room) {
+            room = {id, type:'private', name: roomName || (creator ? 'Private chat' : 'Joined private chat'), code, creator:!!creator, cachedHtml:'', unread:0, lastMessage:'', pinned:[]};
+            convoRooms.push(room);
+            persistConversationList();
+        } else if (roomName) room.name = roomName;
+        activateConversation(room);
+    }
+
+    function openCreateRoomDialog() {
+        newRoomNameInput.value = '';
+        roomCreateModal.classList.remove('hidden');
+        setTimeout(() => newRoomNameInput.focus(), 40);
+    }
+    function openJoinRoomDialog() {
+        roomJoinCodeInput.value = '';
+        roomJoinModal.classList.remove('hidden');
+        setTimeout(() => roomJoinCodeInput.focus(), 40);
+    }
+    function createNamedPrivateRoom() {
+        const name = newRoomNameInput.value.trim();
+        if (!name) { newRoomNameInput.focus(); newRoomNameInput.setCustomValidity('Enter a name for this chat.'); newRoomNameInput.reportValidity(); newRoomNameInput.setCustomValidity(''); return; }
+        const code = 'imsg_priv_' + Math.random().toString(36).substring(2, 10);
+        roomCreateModal.classList.add('hidden');
+        addPrivateConversation(code, true, name);
+    }
+    function joinPrivateRoomFromDialog() {
+        const code = roomJoinCodeInput.value.trim();
+        if (!code) { roomJoinCodeInput.focus(); return; }
+        roomJoinModal.classList.add('hidden');
+        addPrivateConversation(code, false);
+    }
+    createPrivateBtn.addEventListener('click', openCreateRoomDialog);
+    joinPrivateBtn.addEventListener('click', joinPrivateRoomFromDialog);
+    sidebarCreatePrivateBtn.addEventListener('click', openCreateRoomDialog);
+    sidebarJoinPrivateBtn.addEventListener('click', openJoinRoomDialog);
+    cancelCreateRoomBtn.addEventListener('click', () => roomCreateModal.classList.add('hidden'));
+    confirmCreateRoomBtn.addEventListener('click', createNamedPrivateRoom);
+    cancelJoinRoomBtn.addEventListener('click', () => roomJoinModal.classList.add('hidden'));
+    confirmJoinRoomBtn.addEventListener('click', joinPrivateRoomFromDialog);
+    newRoomNameInput.addEventListener('keydown', e => { if (e.key === 'Enter') createNamedPrivateRoom(); });
+    roomJoinCodeInput.addEventListener('keydown', e => { if (e.key === 'Enter') joinPrivateRoomFromDialog(); });
+    sidebarLogoutBtn.addEventListener('click', () => {
+        if (confirm('Sign out of Convo?')) logoutBtn.click();
+    });
 
 
     /*
@@ -2542,7 +3233,7 @@
     function initPublicPeerConnection() {
 
         peer =
-            new Peer(
+            createRoomPeer(
                 PUBLIC_ROOM_PREFIX,
                 peerConfig
             );
@@ -2552,6 +3243,8 @@
             () => {
 
                 isHost = true;
+                const savedHostHistory = readStoredHistory(activeRoomId, true);
+                if (savedHostHistory.length) mergeHistoryPackets(savedHostHistory);
 
                 connectionStatus.innerText =
                     'Hosting • 1 online';
@@ -2566,9 +3259,7 @@
                     }
                 );
 
-                appendSystemMessage(
-                    'Connected to Public Lobby.'
-                );
+                if (activeRoomId === visibleRoomId) appendSystemMessage('Connected to Public Lobby.');
 
             }
         );
@@ -2586,7 +3277,7 @@
                     isHost = false;
 
                     peer =
-                        new Peer(
+                        createRoomPeer(
                             peerConfig
                         );
 
@@ -2601,7 +3292,7 @@
                                 peer.connect(
                                     PUBLIC_ROOM_PREFIX
                                 );
-
+                            bindEventsToRoom(hostConnection, activeRoomId);
                             setupClientConnection();
 
                         }
@@ -2625,11 +3316,11 @@
 
         peer =
             creator
-                ? new Peer(
+                ? createRoomPeer(
                     targetId,
                     peerConfig
                 )
-                : new Peer(
+                : createRoomPeer(
                     peerConfig
                 );
 
@@ -2640,6 +3331,8 @@
                 if (creator) {
 
                     isHost = true;
+                    const savedHostHistory = readStoredHistory(activeRoomId, true);
+                    if (savedHostHistory.length) mergeHistoryPackets(savedHostHistory);
 
                     connectionStatus.innerText =
                         'Hosting secure session';
@@ -2654,13 +3347,10 @@
                         }
                     );
 
-                    appendSystemMessage(
-                        'Secure room created.'
-                    );
-
-                    appendCodeMessage(
-                        id
-                    );
+                    if (activeRoomId === visibleRoomId) {
+                        appendSystemMessage('Secure room created.');
+                        appendCodeMessage(id);
+                    }
 
                     messageLog.push({
                         type:
@@ -2682,7 +3372,7 @@
                         peer.connect(
                             targetId
                         );
-
+                    bindEventsToRoom(hostConnection, activeRoomId);
                     setupClientConnection();
 
                 }
@@ -2701,6 +3391,7 @@
             'connection',
             conn => {
 
+                bindEventsToRoom(conn, activeRoomId);
                 connections.push(
                     conn
                 );
@@ -2853,6 +3544,11 @@
                 );
 
                 broadcastUserList();
+                const room = convoRooms.find(r => r.id === activeRoomId);
+                if (sourceConn && sourceConn.open) {
+                    sourceConn.send({type:'ROOM_META', name:room?.name || (activeRoomId === 'public' ? 'Main chat' : 'Private chat'), code:room?.code || ''});
+                    sourceConn.send({type:'SYNC_HISTORY', messages:readStoredHistory(activeRoomId, true)});
+                }
 
             }
 
@@ -2860,6 +3556,19 @@
 
         }
 
+        if (packet.type === 'ROOM_META') {
+            const room = convoRooms.find(r => r.id === activeRoomId);
+            if (room && packet.name) {
+                room.name = packet.name; room.code = packet.code || room.code;
+                if (activeRoomId === visibleRoomId) { roomTitleDisplay.innerText = room.name; sidebarRoomLabel.innerText = room.name; }
+                persistConversationList(); renderConversationList();
+            }
+            return;
+        }
+        if (packet.type === 'SYNC_HISTORY') {
+            mergeHistoryPackets(packet.messages || []);
+            return;
+        }
 
         if (
             packet.type ===
@@ -2884,32 +3593,23 @@
         }
 
 
-        if (
-            packet.type ===
-            'CHAT'
-        ) {
-
-            if (
-                packet.sender.username ===
-                currentUser.username
-            ) {
-                return;
+        if (packet.type === 'CHAT') {
+            if (packet.sender?.username === currentUser.username) return;
+            messageLog.push(packet);
+            const room = convoRooms.find(r => r.id === activeRoomId);
+            if (room) {
+                room.lastMessage = packet.text || '';
+                if (activeRoomId !== visibleRoomId) room.unread = (room.unread || 0) + 1;
             }
-
-            appendMessage(
-                packet,
-                'received'
-            );
-
-            messageLog.push(
-                packet
-            );
-
-            sidebarLastMsg.innerText =
-                packet.text;
-
+            if (activeRoomId === visibleRoomId) {
+                appendMessage(packet, 'received');
+                sidebarLastMsg.innerText = packet.text || '';
+            }
+            persistRoomHistory(activeRoomId, isHost);
+            if (isHost && sourceConn) broadcastPacket(packet, sourceConn);
+            notifyNewMessage(packet);
+            renderConversationList();
             return;
-
         }
 
 
@@ -2918,47 +3618,46 @@
             'SYSTEM'
         ) {
 
-            appendSystemMessage(
-                packet.text
-            );
-
+            if (activeRoomId === visibleRoomId) appendSystemMessage(packet.text);
+            else { messageLog.push(packet); persistRoomHistory(activeRoomId, isHost); }
             return;
 
         }
 
 
-        if (
-            packet.type ===
-            'FILE'
-        ) {
-
-            if (
-                packet.sender.username ===
-                currentUser.username
-            ) {
-                return;
+        if (packet.type === 'FILE') {
+            if (packet.sender?.username === currentUser.username) return;
+            messageLog.push(packet);
+            const room = convoRooms.find(r => r.id === activeRoomId);
+            if (room) {
+                room.lastMessage = packet.fileName ? `📎 ${packet.fileName}` : 'Attachment';
+                if (activeRoomId !== visibleRoomId) room.unread = (room.unread || 0) + 1;
             }
-
-            appendFileMessage(
-                packet,
-                'received'
-            );
-
+            if (activeRoomId === visibleRoomId) appendFileMessage(packet, 'received');
+            persistRoomHistory(activeRoomId, isHost);
+            if (isHost && sourceConn) broadcastPacket(packet, sourceConn);
+            notifyNewMessage(packet);
+            renderConversationList();
             return;
-
         }
 
+
+        if (packet.type === 'EDIT') {
+            messageLog = messageLog.map(m => m.id === packet.id ? {...m, text:packet.text, edited:true} : m);
+            if (activeRoomId === visibleRoomId) { const wrapper = [...messagesBox.querySelectorAll('.message-wrapper')].find(el => el.dataset.msgId === packet.id); const textNode = wrapper?.querySelector('.bubble span'); if (textNode) textNode.textContent = packet.text; }
+            persistRoomHistory(activeRoomId, isHost);
+            if (isHost && sourceConn) broadcastPacket(packet, sourceConn);
+            return;
+        }
 
         if (
             packet.type ===
             'REACTION'
         ) {
 
-            applyReactionToDOM(
-                packet.msgId,
-                packet.reaction
-            );
-
+            if (activeRoomId === visibleRoomId) applyReactionToDOM(packet.msgId, packet.reaction);
+            persistRoomHistory(activeRoomId, isHost);
+            if (isHost && sourceConn) broadcastPacket(packet, sourceConn);
             return;
 
         }
@@ -2968,6 +3667,7 @@
             packet.type ===
             'TYPING'
         ) {
+            if (activeRoomId !== visibleRoomId) return;
 
             typingSenderName.innerText =
                 packet.displayName;
@@ -3545,6 +4245,7 @@
 
                 text,
 
+                timestamp: Date.now(),
                 time:
                     new Date()
                         .toLocaleTimeString(
@@ -3568,7 +4269,7 @@
             messageLog.push(
                 packet
             );
-
+            persistRoomHistory(activeRoomId, isHost);
 
             appendMessage(
                 packet,
@@ -3597,6 +4298,10 @@
 
             sidebarLastMsg.innerText =
                 text;
+            const activeRoom = convoRooms.find(r => r.id === activeRoomId);
+            if (activeRoom) activeRoom.lastMessage = text;
+            persistConversationList();
+            renderConversationList();
 
             messageInput.value =
                 '';
@@ -3669,6 +4374,22 @@
     );
 
 
+    const chatDropTarget = document.querySelector('.chat-pane');
+    if (chatDropTarget) {
+        ['dragenter','dragover'].forEach(type => chatDropTarget.addEventListener(type, e => {
+            e.preventDefault(); chatDropTarget.classList.add('convo-drop-active');
+        }));
+        ['dragleave','drop'].forEach(type => chatDropTarget.addEventListener(type, e => {
+            e.preventDefault(); chatDropTarget.classList.remove('convo-drop-active');
+        }));
+        chatDropTarget.addEventListener('drop', e => {
+            const file = e.dataTransfer?.files?.[0];
+            if (!file) return;
+            const transfer = new DataTransfer(); transfer.items.add(file); fileInput.files = transfer.files;
+            fileInput.dispatchEvent(new Event('change', {bubbles:true}));
+        });
+    }
+
     fileInput.addEventListener(
         'change',
         e => {
@@ -3694,6 +4415,8 @@
                             Math.random()
                                 .toString(36)
                                 .substring(2, 9),
+
+                        timestamp: Date.now(),
 
                         sender:
                             currentUser,
@@ -3759,6 +4482,30 @@
         }
     );
 
+
+    ctxMenuEdit?.addEventListener('click', () => {
+        if (!contextTargetPacket || contextTargetPacket.sender?.username !== currentUser.username) return;
+        const updated = prompt('Edit your message:', contextTargetPacket.text || '');
+        if (updated === null || !updated.trim()) { bubbleContextMenu.classList.add('hidden'); return; }
+        const packet = {...contextTargetPacket, text:updated.trim(), edited:true, timestamp:Date.now()};
+        messageLog = messageLog.map(m => m.id === packet.id ? packet : m);
+        const room = convoRooms.find(r => r.id === activeRoomId);
+        if (room) room.lastMessage = packet.text;
+        messagesBox.innerHTML = '<div class="date-divider">Conversation history</div>';
+        messageLog.forEach(m => { if(m.type === 'CHAT') appendMessage(m, m.sender?.username === currentUser.username ? 'sent':'received'); else if(m.type === 'FILE') appendFileMessage(m, m.sender?.username === currentUser.username ? 'sent':'received'); });
+        const editPacket = {type:'EDIT', id:packet.id, text:packet.text, sender:currentUser, edited:true};
+        if (isHost) broadcastPacket(editPacket, null); else if (hostConnection?.open) hostConnection.send(editPacket);
+        persistRoomHistory(activeRoomId, isHost); bubbleContextMenu.classList.add('hidden');
+    });
+    ctxMenuPin?.addEventListener('click', () => {
+        if (!contextTargetPacket) return;
+        const room = convoRooms.find(r => r.id === activeRoomId); if (!room) return;
+        room.pinned = Array.isArray(room.pinned) ? room.pinned : [];
+        const exists = room.pinned.some(m => m.id === contextTargetPacket.id);
+        room.pinned = exists ? room.pinned.filter(m => m.id !== contextTargetPacket.id) : [...room.pinned, contextTargetPacket];
+        persistConversationList(); bubbleContextMenu.classList.add('hidden');
+        alert(exists ? 'Message unpinned.' : 'Message pinned. Open Conversation Details to view pinned messages.');
+    });
 
     /*
      * =========================================================
@@ -3848,6 +4595,7 @@
         bubble.appendChild(
             text
         );
+        if (msg.edited) { const edited = document.createElement('small'); edited.className = 'edited-label'; edited.textContent = 'edited'; bubble.appendChild(edited); }
 
 
         bubble.addEventListener(
@@ -3858,6 +4606,9 @@
 
                 contextTargetMessageId =
                     msg.id;
+                contextTargetPacket = msg;
+                ctxMenuEdit.style.display = msg.sender?.username === currentUser.username ? 'flex' : 'none';
+                ctxMenuPin.style.display = 'flex';
 
                 bubbleContextMenu.style.top =
                     `${e.clientY}px`;
@@ -4196,13 +4947,24 @@
     infoBtn.addEventListener(
         'click',
         () => {
-
             renderParticipantsUI();
-
-            infoModal.classList.remove(
-                'hidden'
-            );
-
+            const room = convoRooms.find(r => r.id === activeRoomId);
+            detailsInviteCode.textContent = room?.type === 'private' ? (room.code || 'Unavailable') : 'Public room';
+            pinnedMessagesContainer.innerHTML = '';
+            (room?.pinned || []).forEach(m => {
+                const row = document.createElement('div'); row.className = 'detail-list-item';
+                row.textContent = `${m.sender?.displayName || 'Someone'}: ${m.text || m.fileName || 'Attachment'}`;
+                pinnedMessagesContainer.appendChild(row);
+            });
+            if (!pinnedMessagesContainer.children.length) pinnedMessagesContainer.textContent = 'No pinned messages yet.';
+            sharedFilesContainer.innerHTML = '';
+            messageLog.filter(m => m.type === 'FILE').slice(-20).forEach(m => {
+                const row = document.createElement('div'); row.className = 'detail-list-item';
+                row.textContent = `${m.fileName || 'Shared file'} · ${m.sender?.displayName || 'Someone'}`;
+                sharedFilesContainer.appendChild(row);
+            });
+            if (!sharedFilesContainer.children.length) sharedFilesContainer.textContent = 'No shared files yet.';
+            infoModal.classList.remove('hidden');
         }
     );
 
@@ -4374,14 +5136,9 @@
         'click',
         () => {
 
-            if (
-                confirm(
-                    'Leave current conversation?'
-                )
-            ) {
-
-                executeCleanUp();
-
+            if (confirm('Return to Main chat?')) {
+                const mainRoom = convoRooms.find(r => r.id === 'public');
+                if (mainRoom) activateConversation(mainRoom);
             }
 
         }
@@ -4390,6 +5147,10 @@
 
     function executeCleanUp() {
 
+        // Full cleanup is reserved for sign-out; switching rooms never calls this.
+        const allPeers = new Set([peer, ...[...roomSessions.values()].map(session => session?.peer)].filter(Boolean));
+        allPeers.forEach(roomPeer => { try { roomPeer.destroy(); } catch {} });
+        roomSessions.clear();
         hideIncomingCallScreen();
 
 
