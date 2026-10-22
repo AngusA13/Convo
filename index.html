@@ -5818,5 +5818,131 @@
 })();
 </script>
 
+<style id="convo-upgrades-css">
+  .bubble code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .88em; padding: 1px 5px; border-radius: 5px; background: rgba(127,127,127,.22); }
+  .bubble a { text-decoration: underline; word-break: break-all; }
+  .bubble .mention { font-weight: 700; padding: 0 3px; border-radius: 5px; background: rgba(127,127,127,.2); }
+  .bubble .mention.me { background: #ffd60a; color: #000; }
+  .chat-pane { position: relative; }
+  #toBottomBtn { position: absolute; right: 16px; bottom: 92px; z-index: 30; border: 0; border-radius: 99px; padding: 8px 14px; font-weight: 700; font-size: .8rem; cursor: pointer; color: #fff; background: var(--primary); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+  #toBottomBtn.hidden { display: none; }
+  .call-tile { cursor: pointer; }
+  .call-tile.spot { grid-column: 1 / -1; grid-row: span 2; }
+  #videoContainer:fullscreen { max-height: none; margin: 0; border-radius: 0; }
+</style>
+<script id="convo-upgrades">
+(function () {
+    'use strict';
+    const byId = id => document.getElementById(id);
+
+    /* 1. Rich text: `code`, **bold**, _italic_, ~strike~, links, @mentions */
+    const RICH = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|((?<!\w)_(?=\w)[^_\n]*\w_(?!\w))|((?<!\w)~(?=\w)[^~\n]*\w~(?!\w))|(https?:\/\/[^\s<]+)|(@[\w.-]+)/g;
+    function richText(el, raw) {
+        el.textContent = ''; RICH.lastIndex = 0; let i = 0, m;
+        while ((m = RICH.exec(raw))) {
+            if (m.index > i) el.append(raw.slice(i, m.index));
+            const t = m[0]; let n;
+            if (m[1]) { n = document.createElement('code'); n.textContent = t.slice(1, -1); }
+            else if (m[2]) { n = document.createElement('b'); n.textContent = t.slice(2, -2); }
+            else if (m[3]) { n = document.createElement('i'); n.textContent = t.slice(1, -1); }
+            else if (m[4]) { n = document.createElement('s'); n.textContent = t.slice(1, -1); }
+            else if (m[5]) { n = document.createElement('a'); n.href = t; n.target = '_blank'; n.rel = 'noopener noreferrer'; n.textContent = t; }
+            else { n = document.createElement('span'); n.className = 'mention' + (t.slice(1).toLowerCase() === (currentUser.username || '').toLowerCase() ? ' me' : ''); n.textContent = t; }
+            el.append(n); i = m.index + t.length;
+        }
+        if (i < raw.length) el.append(raw.slice(i));
+    }
+
+    /* 2. Don't yank the reader to the bottom while they scroll history; show a jump pill instead */
+    const pill = document.createElement('button');
+    pill.id = 'toBottomBtn'; pill.type = 'button'; pill.className = 'hidden';
+    document.querySelector('.chat-pane').appendChild(pill);
+    let unseen = 0;
+    const awayFromBottom = () => messagesBox.scrollHeight - messagesBox.scrollTop - messagesBox.clientHeight > 250;
+    function updPill() { pill.classList.toggle('hidden', !awayFromBottom() && !unseen); pill.textContent = unseen ? `↓ ${unseen} new` : '↓ Latest'; }
+    messagesBox.addEventListener('scroll', () => { if (!awayFromBottom()) unseen = 0; updPill(); }, { passive: true });
+    pill.addEventListener('click', () => { unseen = 0; messagesBox.scrollTo({ top: messagesBox.scrollHeight, behavior: 'smooth' }); setTimeout(updPill, 400); });
+
+    const _appendMessage = appendMessage;
+    appendMessage = function (msg, type) {
+        const near = messagesBox.scrollHeight - messagesBox.scrollTop - messagesBox.clientHeight < 120, prev = messagesBox.scrollTop;
+        _appendMessage(msg, type);
+        const span = messagesBox.lastElementChild?.querySelector('.bubble > span');
+        if (span && msg.text) richText(span, msg.text);
+        if (!near && type === 'received') { messagesBox.scrollTop = prev; unseen++; }
+        else messagesBox.scrollTop = messagesBox.scrollHeight;
+        updPill();
+    };
+
+    /* 3. Slash commands */
+    const ART = { shrug: '¯\\_(ツ)_/¯', tableflip: '(╯°□°)╯︵ ┻━┻', unflip: '┬─┬ ノ( ゜-゜ノ)', lenny: '( ͡° ͜ʖ ͡°)' };
+    chatForm.addEventListener('submit', () => {
+        const m = messageInput.value.match(/^\/(shrug|tableflip|unflip|lenny)\b\s*(.*)$/i);
+        if (m) messageInput.value = (m[2] ? m[2] + ' ' : '') + ART[m[1].toLowerCase()];
+    }, true);
+
+    /* 4. Paste an image straight into the chat */
+    messageInput.addEventListener('paste', e => {
+        const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith('image/'));
+        if (!f) return;
+        e.preventDefault();
+        const dt = new DataTransfer(); dt.items.add(new File([f], 'pasted-' + Date.now() + '.png', { type: f.type }));
+        fileInput.files = dt.files; fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    /* 5. Drafts are kept per chat when you switch rooms */
+    const drafts = new Map(), _activate = activateConversation;
+    activateConversation = function (room, first) {
+        drafts.set(visibleRoomId, messageInput.value);
+        _activate(room, first);
+        if (room) messageInput.value = drafts.get(room.id) || '';
+        unseen = 0; updPill();
+    };
+
+    /* 6. Double-click / double-tap a message to ❤️ it */
+    messagesBox.addEventListener('dblclick', e => {
+        const id = e.target.closest('.bubble:not(.system)')?.closest('.message-wrapper')?.dataset.msgId;
+        if (id) sendReaction(id, '❤️');
+    });
+
+    /* 7. Calls: click a tile to spotlight it, plus fullscreen */
+    callGrid.addEventListener('click', e => {
+        const t = e.target.closest('.call-tile'); if (!t) return;
+        const was = t.classList.contains('spot');
+        callGrid.querySelectorAll('.spot').forEach(x => x.classList.remove('spot'));
+        if (!was && callGrid.children.length > 1) t.classList.add('spot');
+    });
+    const fs = document.createElement('button');
+    fs.type = 'button'; fs.title = 'Fullscreen'; fs.textContent = '⛶';
+    byId('callControls').insertBefore(fs, byId('callLeaveBtn'));
+    fs.addEventListener('click', () => {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else videoContainer.requestFullscreen?.().catch(() => {});
+    });
+
+    /* 8. Export the open chat as a text file */
+    const exp = document.createElement('button');
+    exp.type = 'button'; exp.className = 'ios-btn ios-btn-secondary'; exp.textContent = 'Export chat (.txt)';
+    byId('closeInfoModalBtn').before(exp);
+    exp.addEventListener('click', () => {
+        const lines = messageLog.filter(m => m.type === 'CHAT' || m.type === 'FILE').map(m =>
+            `[${new Date(m.timestamp || Date.now()).toLocaleString()}] ${m.sender?.displayName || 'Someone'}: ${m.text || '📎 ' + (m.fileName || 'file')}`);
+        if (!lines.length) { alert('Nothing to export yet.'); return; }
+        const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain' }));
+        const a = document.createElement('a'); a.href = url; a.download = (roomTitleDisplay.innerText || 'chat').replace(/[^\w-]+/g, '_') + '.txt';
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+
+    /* 9. Ctrl/Cmd+K jumps to chat search */
+    document.addEventListener('keydown', e => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            if (window.innerWidth <= 820) byId('mobileMenuBtn')?.click();
+            sidebarSearchInput.focus(); sidebarSearchInput.select();
+        }
+    });
+})();
+</script>
+
 </body>
 </html>
