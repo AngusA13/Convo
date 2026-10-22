@@ -2469,6 +2469,7 @@
     <div class="settings-option"><div><strong>Accent colour</strong><span>Personalise Convo's blue interface</span></div><select id="accentColorSelect" aria-label="Accent colour"><option value="#087cff">Ocean blue</option><option value="#087f8c">Teal</option><option value="#16803c">Green</option><option value="#d97706">Amber</option><option value="#db2777">Pink</option></select></div>
     <label class="settings-check"><input id="compactModeToggle" type="checkbox"> Compact message spacing</label>
     <div class="settings-option"><div><strong>Backup & restore</strong><span>Export chats and settings, or restore a backup file</span></div><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="ios-btn ios-btn-secondary" id="exportBackupBtn" type="button">Export</button><button class="ios-btn ios-btn-secondary" id="importBackupBtn" type="button">Restore</button><input id="importBackupFile" type="file" accept="application/json,.json" hidden></div></div>
+    <div class="settings-option"><div><strong>Clear all data</strong><span>Delete your account, chats, history and settings from this device</span></div><button class="ios-btn ios-btn-secondary" id="clearAllDataBtn" type="button" style="color:#ff3b30">Clear all data</button></div>
     <p class="dialog-description">Backups include local chat history and preferences, but exclude account credentials. Desktop notifications require browser permission. Rooms cannot retrieve history while the host is offline.</p>
     <div class="dialog-actions"><button class="ios-btn" id="closeSettingsBtn" type="button">Done</button></div>
   </div>
@@ -3412,9 +3413,7 @@
         }
         if (room?.muted) { persistConversationList(); return; }
         if (localStorage.getItem('xchat_message_sound') === 'true') playIncomingMessageSound();
-        if (document.hidden && localStorage.getItem('xchat_desktop_notifications') === 'true' && 'Notification' in window && Notification.permission === 'granted') {
-            try { new Notification(packet.sender?.displayName || 'New message', { body: packet.text || packet.fileName || 'Sent an attachment' }); } catch {}
-        }
+        desktopNotify(packet, room);
         persistConversationList();
     }
 
@@ -3940,6 +3939,8 @@
         if (packet.profile) delete packet.profile.password;
         (packet.users || []).forEach(u => { if (u && u.profile) delete u.profile.password; });
         if (String(packet.type).startsWith('CALL_')) { handleCallPacket(packet, sourceConn); return; }
+        if (String(packet.type).startsWith('X_')) { if (isHost && sourceConn) broadcastPacket(packet, sourceConn); handleXPacket(packet); return; }
+        if (packet.type === 'CLEAR_CHAT') { if (!isHost) clearChatLocal(activeRoomId, true); return; }
 
         if (
             packet.type ===
@@ -4088,7 +4089,7 @@
         if (packet.type === 'READ_RECEIPT') {
             const target=[...messagesBox.querySelectorAll('.message-wrapper')].find(el=>el.dataset.msgId===packet.msgId);
             const receipt=target?.querySelector('.msg-meta-receipt'); if(receipt) receipt.textContent='Read';
-            const found=messageLog.find(m=>m.id===packet.msgId); if(found) found.readBy=[...new Set([...(found.readBy||[]),packet.reader||'reader'])];
+            const found=messageLog.find(m=>m.id===packet.msgId); if(found) found.readBy=[...new Set([...(found.readBy||[]),packet.reader||'reader'])]; if(receipt && found && found.readBy.length>1) receipt.textContent='Seen by '+found.readBy.length;
             if(isHost && sourceConn) broadcastPacket(packet,sourceConn);
             persistRoomHistory(activeRoomId,isHost); return;
         }
@@ -4491,7 +4492,7 @@
     });
     function leaveCall() {
         const s = callS; if (!s) return;
-        callS = null; clearInterval(timerIv);
+        callS = null; clearInterval(timerIv); if (window.logCall) window.logCall(s);
         if (s.sharing) s.sharing.getTracks().forEach(t => t.stop());
         s.calls.forEach(({ mc }) => { try { mc.close(); } catch {} });
         s.lo.getTracks().forEach(t => t.stop());
@@ -5933,6 +5934,92 @@
         document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
 
+
+    /* 10. Host-only: clear all messages for everyone in the chat */
+    function clearChatLocal(rid, byHost) {
+        runInRoomSession(rid, () => {
+            messageLog = [];
+            const room = convoRooms.find(r => r.id === rid);
+            if (room) { room.pinned = []; room.lastMessage = ''; }
+            persistRoomHistory(rid, isHost);
+            if (room) { room.lastMessage = ''; persistConversationList(); }
+            if (rid === visibleRoomId) {
+                messagesBox.innerHTML = '<div class="date-divider">Conversation history</div>';
+                appendSystemMessage(byHost ? 'The host cleared all messages' : 'You cleared all messages');
+            }
+            renderConversationList();
+        });
+    }
+    window.clearChatLocal = clearChatLocal;
+    const clr = document.createElement('button');
+    clr.type = 'button'; clr.className = 'ios-btn ios-btn-secondary'; clr.textContent = 'Clear all messages';
+    clr.style.color = '#ff3b30'; clr.style.display = 'none';
+    byId('closeInfoModalBtn').before(clr);
+    new MutationObserver(() => { if (!infoModal.classList.contains('hidden')) clr.style.display = isHost ? '' : 'none'; })
+        .observe(infoModal, { attributes: true, attributeFilter: ['class'] });
+    clr.addEventListener('click', () => {
+        if (!isHost) return;
+        if (!confirm('Clear all messages for everyone in this chat? This cannot be undone.')) return;
+        const rid = activeRoomId;
+        clearChatLocal(rid, false);
+        broadcastPacket({ type: 'CLEAR_CHAT' });
+        infoModal.classList.add('hidden');
+    });
+
+
+    /* 11. Desktop notifications for every incoming message (on by default) */
+    const NKEY = 'xchat_desktop_notifications';
+    window.desktopNotify = function (packet, room) {
+        if (!('Notification' in window) || Notification.permission !== 'granted') return;
+        if (localStorage.getItem(NKEY) === 'false') return;
+        if (room && room.id === visibleRoomId && document.hasFocus() && !document.hidden) return; // you're already looking at it
+        try {
+            const where = room ? ` · ${room.name}` : '';
+            const n = new Notification((packet.sender?.displayName || 'New message') + where, {
+                body: packet.text || ('📎 ' + (packet.fileName || 'Attachment')), tag: 'convo-' + (room?.id || 'chat'), renotify: true
+            });
+            n.onclick = () => { window.focus(); if (room) activateConversation(room); n.close(); };
+            setTimeout(() => n.close(), 8000);
+        } catch {}
+    };
+    function syncNotifToggle() { if (desktopNotificationsToggle) desktopNotificationsToggle.checked = localStorage.getItem(NKEY) === 'true'; }
+    function askNotifPermission() {
+        if (!('Notification' in window) || !currentUser?.username || localStorage.getItem(NKEY) === 'false') return;
+        if (Notification.permission === 'granted') { localStorage.setItem(NKEY, 'true'); syncNotifToggle(); }
+        else if (Notification.permission === 'default') Notification.requestPermission().then(p => { localStorage.setItem(NKEY, String(p === 'granted')); syncNotifToggle(); }).catch(() => {});
+    }
+    ['click', 'keydown'].forEach(ev => document.addEventListener(ev, function once() { if (currentUser?.username) { askNotifPermission(); document.removeEventListener(ev, once); } }));
+
+    /* 12. Clear the chat on my own screen only (guests; hosts already have "Clear all messages") */
+    const clearedKey = rid => 'xchat_cleared_' + rid;
+    const _merge = mergeHistoryPackets;
+    mergeHistoryPackets = function (packets) {
+        const t = +localStorage.getItem(clearedKey(activeRoomId)) || 0;
+        _merge(Array.isArray(packets) ? packets.filter(p => (p?.timestamp || 0) > t) : packets);
+    };
+    const mine = document.createElement('button');
+    mine.type = 'button'; mine.className = 'ios-btn ios-btn-secondary'; mine.textContent = 'Clear my screen'; mine.style.display = 'none';
+    byId('closeInfoModalBtn').before(mine);
+    new MutationObserver(() => { if (!infoModal.classList.contains('hidden')) mine.style.display = isHost ? 'none' : ''; })
+        .observe(infoModal, { attributes: true, attributeFilter: ['class'] });
+    mine.addEventListener('click', () => {
+        if (!confirm('Clear all messages on your screen? Other people keep theirs.')) return;
+        localStorage.setItem(clearedKey(activeRoomId), String(Date.now()));
+        clearChatLocal(activeRoomId, false);
+        infoModal.classList.add('hidden');
+    });
+
+    /* 13. Settings: wipe everything Convo stored on this device */
+    byId('clearAllDataBtn').addEventListener('click', () => {
+        if (!confirm('Delete ALL Convo data on this device — your account, chats, history and settings? This cannot be undone.')) return;
+        if (!confirm('Last chance: really delete everything and start fresh?')) return;
+        try { leaveCall(); } catch {}
+        try { roomSessions.forEach(r => { try { r.peer && r.peer.destroy(); } catch {} }); peer && peer.destroy(); } catch {}
+        Object.keys(localStorage).filter(k => k.startsWith('xchat_')).forEach(k => localStorage.removeItem(k));
+        try { sessionStorage.clear(); } catch {}
+        location.reload();
+    });
+
     /* 9. Ctrl/Cmd+K jumps to chat search */
     document.addEventListener('keydown', e => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -5941,6 +6028,608 @@
             sidebarSearchInput.focus(); sidebarSearchInput.select();
         }
     });
+})();
+</script>
+
+<style id="convo-upgrades2-css">
+  .poll { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; min-width: 190px; }
+  .poll-opt { position: relative; display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 1px solid rgba(127,127,127,.4); border-radius: 9px; padding: 6px 10px; background: linear-gradient(90deg, rgba(127,127,127,.3) var(--pct), transparent var(--pct)); color: inherit; font: inherit; cursor: pointer; }
+  .poll-opt.mine { border-color: #34c759; box-shadow: inset 0 0 0 1px #34c759; }
+  .poll small { opacity: .7; }
+  .link-card { display: block; margin-top: 8px; padding: 7px 10px; border-radius: 10px; background: rgba(127,127,127,.18); color: inherit; text-decoration: none !important; font-size: .82rem; overflow: hidden; }
+  .link-card img { display: block; max-width: 100%; max-height: 180px; border-radius: 8px; margin-bottom: 4px; }
+  .bubble audio { display: block; margin-top: 6px; max-width: 100%; }
+  .exp-tag { font-size: .7rem; opacity: .7; margin-left: 6px; }
+  #chatSearchBar { display: flex; gap: 6px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--sidebar-border); }
+  #chatSearchBar.hidden { display: none; }
+  #chatSearchBar input { flex: 1; min-width: 0; padding: 7px 12px; border-radius: 99px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-color); }
+  #chatSearchBar button { border: 0; background: transparent; color: var(--text-color); cursor: pointer; font-size: 1rem; }
+  #chatSearchBar .cnt { font-size: .75rem; opacity: .7; min-width: 34px; text-align: center; }
+  ::highlight(convo-search) { background: #ffd60a; color: #000; }
+  .input-wrapper { position: relative; }
+  #mentionBox { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 40; display: flex; flex-direction: column; min-width: 200px; border-radius: 12px; overflow: hidden; background: var(--input-bg); border: 1px solid var(--input-border); box-shadow: 0 8px 24px rgba(0,0,0,.2); }
+  #mentionBox.hidden, #composerMenu.hidden, #callSettings.hidden, #lightbox.hidden, #reactPicker.hidden { display: none; }
+  #mentionBox button, #composerMenu button { border: 0; background: transparent; color: var(--text-color); padding: 9px 14px; text-align: left; cursor: pointer; font: inherit; }
+  #mentionBox button:hover, #composerMenu button:hover { background: var(--hover-bg); }
+  #micBtn.rec { background: #ff3b30; color: #fff; animation: convoPulse 1s infinite; }
+  #moreBtn.on { background: var(--primary); color: #fff; }
+  @keyframes convoPulse { 50% { opacity: .55; } }
+  #composerMenu { position: fixed; z-index: 60; min-width: 230px; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; background: var(--input-bg); border: 1px solid var(--input-border); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  #lightbox { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.92); display: flex; align-items: center; justify-content: center; }
+  #lightbox > img { max-width: 92vw; max-height: 74vh; object-fit: contain; border-radius: 8px; }
+  #lightbox button { position: absolute; border: 0; background: rgba(255,255,255,.15); color: #fff; width: 44px; height: 44px; border-radius: 50%; font-size: 1.4rem; cursor: pointer; }
+  .lb-x { top: 16px; right: 16px; } .lb-p { left: 14px; top: 45%; } .lb-n { right: 14px; top: 45%; }
+  .lb-strip { position: absolute; bottom: 12px; left: 0; right: 0; display: flex; gap: 6px; justify-content: center; overflow-x: auto; padding: 0 12px; }
+  .lb-strip img { height: 54px; border-radius: 6px; opacity: .5; cursor: pointer; } .lb-strip img.on { opacity: 1; outline: 2px solid #fff; }
+  #callSettings { position: absolute; right: 10px; bottom: 62px; z-index: 5; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: rgba(20,22,28,.95); color: #fff; font-size: .8rem; min-width: 220px; }
+  #callSettings select { width: 100%; padding: 5px; border-radius: 6px; }
+  .call-tile.hand::before { content: '✋'; position: absolute; top: 6px; right: 8px; z-index: 3; font-size: 1.4rem; }
+  .fx { position: absolute; bottom: 30px; left: 50%; z-index: 4; font-size: 2rem; pointer-events: none; animation: fxUp 2s ease-out forwards; }
+  @keyframes fxUp { to { transform: translateY(-120px); opacity: 0; } }
+  #reactPicker { position: absolute; bottom: 60px; z-index: 6; display: flex; gap: 4px; padding: 6px 8px; border-radius: 99px; background: rgba(20,22,28,.95); }
+  #reactPicker button { width: 36px !important; height: 36px !important; background: transparent !important; font-size: 1.2rem !important; }
+  #callControls button.off { background: #ff9f0a; }
+  /* look & feel */
+  html[data-theme="dark"][data-variant="amoled"] { --bg-color:#000; --container-bg:#000; --sidebar-bg:#000; --chat-bg:#000; --header-bg:rgba(0,0,0,.94); --msg-received-bg:#141414; --input-bg:#0a0a0a; --input-border:#242424; --hover-bg:#121212; --sidebar-border:#1d1d1d; --header-border:#1d1d1d; }
+  html[data-theme="dark"][data-variant="amoled"] body, html[data-theme="dark"][data-variant="amoled"] .sidebar, html[data-theme="dark"][data-variant="amoled"] .messages-container { background: #000 !important; }
+  html[data-variant="contrast"] { --text-color:#000; --text-secondary:#1a1a1a; --msg-received-bg:#fff; --msg-received-text:#000; --input-border:#000; --sidebar-border:#000; --header-border:#000; --bg-color:#fff; --primary:#0044cc; }
+  html[data-theme="dark"][data-variant="contrast"] { --text-color:#fff; --text-secondary:#f0f0f0; --msg-received-bg:#000; --msg-received-text:#fff; --input-border:#fff; --sidebar-border:#fff; --header-border:#fff; --bg-color:#000; --chat-bg:#000; --container-bg:#000; --sidebar-bg:#000; --primary:#6cb4ff; }
+  html[data-variant="contrast"] .bubble { border: 2px solid currentColor; } html[data-variant="contrast"] a { text-decoration: underline; }
+  html[data-wall] .messages-container { background: var(--wall) !important; }
+  html[data-bubble="square"] .bubble { border-radius: 4px !important; }
+  html[data-bubble="minimal"] .message-wrapper.received .bubble { background: transparent !important; border: 1px solid rgba(127,127,127,.4); box-shadow: none !important; }
+  html[data-bubble="minimal"] .message-wrapper.sent .bubble { border-radius: 8px !important; }
+</style>
+<script id="convo-upgrades2">
+(function () {
+    'use strict';
+    const byId = id => document.getElementById(id), root = document.documentElement;
+    const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); n.append(...kids); return n; };
+    const xsend = p => { if (isHost) broadcastPacket(p, null); else if (hostConnection?.open) hostConnection.send(p); };
+    const wrapOf = id => [...messagesBox.querySelectorAll('.message-wrapper')].find(w => w.dataset.msgId === id);
+
+    /* ---- send a CHAT packet with extra fields (poll, disappearing) exactly like the normal sender ---- */
+    window.sendCustom = sendCustom;
+    function sendCustom(extra) {
+        const text = extra.text;
+        const pkt = { type: 'CHAT', id: 'msg_' + Math.random().toString(36).slice(2, 9), sender: currentUser, text, timestamp: Date.now(),
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), replyTo: activeReplyingMessage ? activeReplyingMessage.text : null, ...extra };
+        messageLog.push(pkt); persistRoomHistory(activeRoomId, isHost); appendMessage(pkt, 'sent'); xsend(pkt);
+        sidebarLastMsg.innerText = text;
+        const r = convoRooms.find(x => x.id === activeRoomId); if (r) { r.lastMessage = text; r.lastActivity = Date.now(); }
+        persistConversationList(); renderConversationList();
+        messageInput.value = ''; activeReplyingMessage = null; replyBanner.style.display = 'none';
+    }
+
+    /* ---- polls ---- */
+    function renderPoll(w, msg) {
+        let box = w.querySelector('.poll');
+        if (!box) { box = el('div', { className: 'poll' }); w.querySelector('.bubble').appendChild(box); }
+        box.innerHTML = '';
+        const votes = msg.poll.votes || {}, total = Object.keys(votes).length;
+        msg.poll.opts.forEach((o, i) => {
+            const n = Object.values(votes).filter(v => v === i).length;
+            const b = el('button', { type: 'button', className: 'poll-opt' + (votes[currentUser.username] === i ? ' mine' : '') }, el('span', { textContent: o }), el('b', { textContent: n }));
+            b.style.setProperty('--pct', (total ? n / total * 100 : 0) + '%'); b.onclick = () => vote(msg.id, i); box.appendChild(b);
+        });
+        box.appendChild(el('small', { textContent: total + (total === 1 ? ' vote' : ' votes') }));
+    }
+    function applyVote(id, opt, voter) {
+        const m = messageLog.find(x => x.id === id); if (!m?.poll) return;
+        (m.poll.votes = m.poll.votes || {})[voter] = opt;
+        const w = wrapOf(id); if (w) renderPoll(w, m);
+        persistRoomHistory(activeRoomId, isHost);
+    }
+    function vote(id, i) { applyVote(id, i, currentUser.username); xsend({ type: 'X_VOTE', id, opt: i, voter: currentUser.username }); }
+    function newPoll() {
+        const q = prompt('Poll question?'); if (!q) return;
+        const o = (prompt('Options, separated by commas (2–6)') || '').split(',').map(x => x.trim()).filter(Boolean).slice(0, 6);
+        if (o.length < 2) { alert('A poll needs at least two options.'); return; }
+        sendCustom({ text: '📊 ' + q, poll: { opts: o, votes: {} } });
+    }
+
+    /* ---- decorate rendered messages: polls, previews, disappearing tag, audio ---- */
+    function previews(w, msg) {
+        const m = (msg.text || '').match(/https?:\/\/[^\s<]+/); if (!m) return;
+        let u; try { u = new URL(m[0]); } catch { return; }
+        const host = u.hostname.replace(/^www\./, ''), yt = host === 'youtu.be' ? u.pathname.slice(1) : (/(^|\.)youtube\.com$/.test(host) ? u.searchParams.get('v') : null);
+        const card = el('a', { className: 'link-card', href: u.href, target: '_blank', rel: 'noopener noreferrer' });
+        if (/\.(png|jpe?g|gif|webp)$/i.test(u.pathname)) card.appendChild(el('img', { src: u.href, loading: 'lazy', referrerPolicy: 'no-referrer', alt: '' }));
+        else if (yt && /^[\w-]{6,15}$/.test(yt)) card.append(el('img', { src: `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`, loading: 'lazy', referrerPolicy: 'no-referrer', alt: '' }), '▶ YouTube video');
+        else card.textContent = '🔗 ' + host;
+        w.querySelector('.bubble')?.appendChild(card);
+    }
+    const _am = appendMessage;
+    appendMessage = function (msg, type) {
+        _am(msg, type);
+        const w = messagesBox.lastElementChild; if (!w || w.dataset.msgId !== msg.id) return;
+        if (msg.poll) renderPoll(w, msg);
+        if (msg.expires) w.querySelector('.bubble')?.appendChild(el('span', { className: 'exp-tag', textContent: '⏱' }));
+        previews(w, msg);
+    };
+    const _afm = appendFileMessage;
+    appendFileMessage = function (msg, type) {
+        _afm(msg, type);
+        if (typeof msg.fileData === 'string' && msg.fileData.startsWith('data:audio/'))
+            messagesBox.lastElementChild?.querySelector('.bubble')?.appendChild(el('audio', { controls: true, src: msg.fileData }));
+    };
+
+    /* ---- disappearing + scheduled messages, "more" menu ---- */
+    let disap = 0; const DIS = [0, 30, 300, 3600], DLAB = ['Off', '30 seconds', '5 minutes', '1 hour'];
+    chatForm.addEventListener('submit', e => {
+        const t = messageInput.value.trim(); if (!t || !disap) return;
+        e.stopImmediatePropagation(); e.preventDefault(); sendCustom({ text: t, expires: Date.now() + disap * 1000 });
+    }, true);
+    setInterval(() => {
+        const now = Date.now(), dead = messageLog.filter(m => m.expires && m.expires <= now); if (!dead.length) return;
+        messageLog = messageLog.filter(m => !dead.includes(m)); dead.forEach(m => wrapOf(m.id)?.remove()); persistRoomHistory(activeRoomId, isHost);
+    }, 1000);
+    const QK = 'xchat_sched', readQ = () => { try { return JSON.parse(localStorage.getItem(QK) || '[]'); } catch { return []; } };
+    setInterval(() => {
+        const q = readQ(), now = Date.now(); if (!q.length || !peer?.open) return;
+        const due = q.filter(x => x.at <= now && x.rid === visibleRoomId); if (!due.length) return;
+        localStorage.setItem(QK, JSON.stringify(q.filter(x => !due.includes(x))));
+        const draft = messageInput.value; due.forEach(x => { messageInput.value = x.text; chatForm.requestSubmit(); }); messageInput.value = draft;
+    }, 5000);
+    const more = el('button', { type: 'button', className: 'plus-btn', id: 'moreBtn', title: 'Poll, disappearing & scheduled messages', textContent: '⋯' });
+    const menu = el('div', { id: 'composerMenu', className: 'hidden' });
+    const mi = (label, fn) => { const b = el('button', { type: 'button', textContent: label }); b.onclick = () => { fn(b); }; menu.appendChild(b); return b; };
+    mi('📊 Create a poll', () => { menu.classList.add('hidden'); newPoll(); });
+    const dBtn = mi('⏱ Disappearing: Off', b => { disap = DIS[(DIS.indexOf(disap) + 1) % DIS.length]; b.textContent = '⏱ Disappearing: ' + DLAB[DIS.indexOf(disap)]; more.classList.toggle('on', !!disap); });
+    mi('⏰ Schedule what I typed', () => {
+        menu.classList.add('hidden');
+        const t = messageInput.value.trim(); if (!t) { alert('Type your message first, then schedule it.'); return; }
+        const mins = parseFloat(prompt('Send in how many minutes?', '5')); if (!(mins > 0)) return;
+        const at = Date.now() + mins * 60000; localStorage.setItem(QK, JSON.stringify([...readQ(), { rid: visibleRoomId, text: t, at }]));
+        messageInput.value = ''; appendSystemMessage('⏰ Scheduled for ' + new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' — Convo must be open then');
+    });
+    document.body.appendChild(menu);
+    more.addEventListener('click', () => { const r = more.getBoundingClientRect(); menu.style.left = Math.max(8, Math.min(r.left, innerWidth - 240)) + 'px'; menu.style.bottom = (innerHeight - r.top + 8) + 'px'; menu.classList.toggle('hidden'); });
+    document.addEventListener('click', e => { if (!menu.contains(e.target) && e.target !== more) menu.classList.add('hidden'); });
+
+    /* ---- voice messages (hold to record, slide away to cancel) ---- */
+    const mic = el('button', { type: 'button', className: 'plus-btn', id: 'micBtn', title: 'Hold to record a voice message', textContent: '🎤' });
+    emojiBtn.after(mic, more);
+    let rec = null, held = false, recT = null;
+    async function recStart(e) {
+        e.preventDefault(); held = true; if (rec) return;
+        let st; try { st = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { alert('Microphone permission is needed for voice messages.'); return; }
+        if (!held) { st.getTracks().forEach(t => t.stop()); return; }
+        const chunks = []; const r = rec = new MediaRecorder(st);
+        r.ondataavailable = ev => chunks.push(ev.data);
+        r.onstop = () => {
+            st.getTracks().forEach(t => t.stop()); clearTimeout(recT); mic.classList.remove('rec'); rec = null;
+            if (r._cancel || !chunks.length) return;
+            const type = r.mimeType || 'audio/webm', f = new File(chunks, 'voice-' + Date.now() + (type.includes('mp4') ? '.m4a' : '.webm'), { type });
+            const dt = new DataTransfer(); dt.items.add(f); fileInput.files = dt.files; fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        r.start(); mic.classList.add('rec'); recT = setTimeout(recEnd, 120000);
+    }
+    function recEnd() { held = false; if (rec) { rec._done = true; if (rec.state !== 'inactive') rec.stop(); } }
+    mic.addEventListener('pointerdown', recStart); mic.addEventListener('pointerup', recEnd);
+    ['pointerleave', 'pointercancel'].forEach(ev => mic.addEventListener(ev, () => { held = false; if (rec && !rec._done) { rec._cancel = true; recEnd(); } }));
+
+    /* ---- search inside a chat ---- */
+    const sBar = el('div', { id: 'chatSearchBar', className: 'hidden' });
+    const sIn = el('input', { type: 'search', placeholder: 'Search this chat…' }), cnt = el('span', { className: 'cnt' });
+    const sb = (t, fn) => el('button', { type: 'button', textContent: t, onclick: fn });
+    sBar.append(sIn, cnt, sb('↑', () => step(-1)), sb('↓', () => step(1)), sb('✕', () => toggleSearch(false)));
+    messagesBox.parentNode.insertBefore(sBar, messagesBox);
+    let hits = [], hi = 0;
+    function jump() { cnt.textContent = hits.length ? `${hi + 1}/${hits.length}` : (sIn.value ? '0' : ''); hits[hi]?.startContainer.parentElement?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    function step(d) { if (hits.length) { hi = (hi + d + hits.length) % hits.length; jump(); } }
+    function runSearch() {
+        const q = sIn.value.trim().toLowerCase(); hits = [];
+        if (q) messagesBox.querySelectorAll('.bubble').forEach(b => {
+            const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT); let n;
+            while ((n = tw.nextNode())) { const t = n.data.toLowerCase(); let i = t.indexOf(q); while (i > -1) { const r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + q.length); hits.push(r); i = t.indexOf(q, i + q.length); } }
+        });
+        if (window.CSS?.highlights && window.Highlight) CSS.highlights.set('convo-search', new Highlight(...hits));
+        hi = hits.length - 1; jump();
+    }
+    function toggleSearch(on) { sBar.classList.toggle('hidden', !on); if (on) { sIn.focus(); sIn.select(); } else { sIn.value = ''; hits = []; window.CSS?.highlights?.delete('convo-search'); cnt.textContent = ''; } }
+    sIn.addEventListener('input', runSearch);
+    sIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? 1 : -1); } if (e.key === 'Escape') toggleSearch(false); });
+    byId('voiceCallBtn').before(el('button', { id: 'searchBtn', type: 'button', className: 'icon-button', title: 'Search this chat', textContent: '🔍', onclick: () => toggleSearch(sBar.classList.contains('hidden')) }));
+
+    /* ---- @mention autocomplete ---- */
+    const mBox = el('div', { id: 'mentionBox', className: 'hidden' }); messageInput.parentNode.appendChild(mBox);
+    messageInput.addEventListener('input', () => {
+        const pre = messageInput.value.slice(0, messageInput.selectionStart), m = pre.match(/(?:^|\s)@([\w.-]*)$/);
+        mBox.classList.add('hidden'); if (!m) return;
+        const q = m[1].toLowerCase();
+        const users = [...onlineUsersMap.values()].map(u => u.profile).filter(p => p && p.username !== currentUser.username && (p.username.toLowerCase().startsWith(q) || (p.displayName || '').toLowerCase().startsWith(q))).slice(0, 5);
+        if (!users.length) return; mBox.innerHTML = '';
+        users.forEach(p => mBox.appendChild(el('button', { type: 'button', textContent: `${p.displayName || p.username}  @${p.username}`, onmousedown: e => {
+            e.preventDefault(); const pos = messageInput.selectionStart;
+            messageInput.value = pre.slice(0, pre.lastIndexOf('@')) + '@' + p.username + ' ' + messageInput.value.slice(pos); mBox.classList.add('hidden'); messageInput.focus();
+        } })));
+        mBox.classList.remove('hidden');
+    });
+
+    /* ---- image viewer with gallery ---- */
+    const lb = el('div', { id: 'lightbox', className: 'hidden' });
+    const lbImg = el('img', { alt: '' }), strip = el('div', { className: 'lb-strip' });
+    const lbb = (c, t, fn) => el('button', { type: 'button', className: c, textContent: t, onclick: fn });
+    lb.append(lbb('lb-x', '✕', () => lb.classList.add('hidden')), lbb('lb-p', '‹', () => showLb(gi - 1)), lbImg, lbb('lb-n', '›', () => showLb(gi + 1)), strip);
+    document.body.appendChild(lb);
+    let gal = [], gi = 0;
+    function showLb(i) { gi = (i + gal.length) % gal.length; lbImg.src = gal[gi].src; [...strip.children].forEach((t, k) => t.classList.toggle('on', k === gi)); }
+    messagesBox.addEventListener('click', e => {
+        const im = e.target.closest('.bubble img'); if (!im) return; e.preventDefault();
+        gal = [...messagesBox.querySelectorAll('.bubble img')].filter(x => x.src); strip.innerHTML = '';
+        gal.forEach((x, k) => strip.appendChild(el('img', { src: x.src, onclick: () => showLb(k) })));
+        lb.classList.remove('hidden'); showLb(gal.indexOf(im));
+    });
+    document.addEventListener('keydown', e => {
+        if (lb.classList.contains('hidden')) return;
+        if (e.key === 'Escape') lb.classList.add('hidden'); if (e.key === 'ArrowLeft') showLb(gi - 1); if (e.key === 'ArrowRight') showLb(gi + 1);
+    });
+
+    /* ---- calls: hand raise, reactions, device picker, push-to-talk, adaptive quality, history ---- */
+    window.handleXPacket = function (p) {
+        if (p.type === 'X_VOTE') applyVote(p.id, p.opt, p.voter);
+        else if (p.type === 'X_CALLFX' && callS && activeRoomId === callS.roomId) showFx(p);
+    };
+    function showFx(p) {
+        const t = callGrid.querySelector(`[data-peer="${CSS.escape(p.peerId === callS.peer.id ? 'self' : p.peerId)}"]`); if (!t) return;
+        if (p.kind === 'hand') t.classList.toggle('hand', !!p.on);
+        else { const f = el('span', { className: 'fx', textContent: p.emoji }); f.style.marginLeft = (Math.random() * 60 - 30) + 'px'; t.appendChild(f); setTimeout(() => f.remove(), 2000); }
+    }
+    function fx(extra) { if (!callS) return; const p = { type: 'X_CALLFX', peerId: callS.peer.id, ...extra }; showFx(p); runInRoomSession(callS.roomId, () => xsend(p)); }
+    const cc = byId('callControls'), leaveB = byId('callLeaveBtn');
+    const cb = (t, title, fn) => el('button', { type: 'button', textContent: t, title, onclick: fn });
+    let hand = false;
+    const handB = cb('✋', 'Raise / lower hand', () => { hand = !hand; handB.classList.toggle('off', hand); fx({ kind: 'hand', on: hand }); });
+    const picker = el('div', { id: 'reactPicker', className: 'hidden' });
+    ['👍', '❤️', '😂', '🎉', '👏'].forEach(e => picker.appendChild(cb(e, '', () => { fx({ kind: 'emoji', emoji: e }); picker.classList.add('hidden'); })));
+    const reactB = cb('😀', 'Send a reaction', () => picker.classList.toggle('hidden'));
+    const setB = cb('⚙', 'Audio settings', () => openSettings());
+    cc.insertBefore(handB, leaveB); cc.insertBefore(reactB, leaveB); cc.insertBefore(setB, leaveB); videoContainer.appendChild(picker);
+
+    const panel = el('div', { id: 'callSettings', className: 'hidden' });
+    const micSel = el('select'), spkSel = el('select'), pttBox = el('input', { type: 'checkbox' });
+    panel.append('Microphone', micSel, 'Speaker', spkSel, el('label', {}, pttBox, ' Push-to-talk (hold Space)')); videoContainer.appendChild(panel);
+    async function openSettings() {
+        panel.classList.toggle('hidden'); if (panel.classList.contains('hidden')) return;
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        const fill = (sel, kind) => { sel.innerHTML = ''; devs.filter(d => d.kind === kind).forEach(d => sel.appendChild(el('option', { value: d.deviceId, textContent: d.label || kind }))); };
+        fill(micSel, 'audioinput'); fill(spkSel, 'audiooutput'); spkSel.disabled = !HTMLMediaElement.prototype.setSinkId;
+    }
+    micSel.addEventListener('change', async () => {
+        if (!callS) return;
+        try {
+            const nt = (await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micSel.value } } })).getAudioTracks()[0], old = callS.lo.getAudioTracks()[0];
+            if (old) { callS.lo.removeTrack(old); old.stop(); } callS.lo.addTrack(nt); nt.enabled = !callS.muted;
+            callS.calls.forEach(({ mc }) => mc.peerConnection?.getSenders().find(s => s.track?.kind === 'audio')?.replaceTrack(nt).catch(() => {}));
+        } catch { alert('Could not switch microphone.'); }
+    });
+    spkSel.addEventListener('change', () => { if (callS) { callS.sink = spkSel.value; callGrid.querySelectorAll('video').forEach(v => v.setSinkId?.(callS.sink).catch(() => {})); } });
+    const _setStream = setStream;
+    setStream = function (pid, st) { _setStream(pid, st); if (callS?.sink) callGrid.querySelector(`[data-peer="${CSS.escape(pid)}"] video`)?.setSinkId?.(callS.sink).catch(() => {}); };
+    const talk = on => callS?.lo.getAudioTracks().forEach(t => t.enabled = on);
+    pttBox.addEventListener('change', () => {
+        if (!callS) return; callS.muted = pttBox.checked; talk(!pttBox.checked);
+        const mb = byId('callMuteBtn'); mb.textContent = callS.muted ? '🔇' : '🎤'; mb.classList.toggle('off', callS.muted);
+    });
+    const typing = e => /INPUT|TEXTAREA|SELECT/.test(e.target.tagName);
+    document.addEventListener('keydown', e => { if (e.code === 'Space' && pttBox.checked && callS && !typing(e)) { e.preventDefault(); if (!e.repeat) talk(true); } });
+    document.addEventListener('keyup', e => { if (e.code === 'Space' && pttBox.checked && callS && !typing(e)) talk(false); });
+    setInterval(() => {
+        if (!callS) { hand = false; handB.classList.remove('off'); pttBox.checked = false; panel.classList.add('hidden'); return; }
+        const n = callS.calls.size + 1; callS.peak = Math.max(callS.peak || 1, n);
+        const tgt = n >= 5 ? [250000, 2] : n >= 3 ? [600000, 1.3] : [1500000, 1];
+        callS.calls.forEach(({ mc }) => {
+            const snd = mc.peerConnection?.getSenders().find(s => s.track?.kind === 'video'); if (!snd) return;
+            const prm = snd.getParameters(); if (!prm.encodings?.length) prm.encodings = [{}];
+            if (prm.encodings[0].maxBitrate !== tgt[0]) { prm.encodings[0].maxBitrate = tgt[0]; prm.encodings[0].scaleResolutionDownBy = tgt[1]; snd.setParameters(prm).catch(() => {}); }
+        });
+    }, 3000);
+    window.logCall = s => {
+        try {
+            const log = JSON.parse(localStorage.getItem('xchat_calllog') || '[]');
+            log.unshift({ room: roomNameOf(s.roomId), at: s.t0, dur: Math.round((Date.now() - s.t0) / 1000), peak: s.peak || 1, video: s.video });
+            localStorage.setItem('xchat_calllog', JSON.stringify(log.slice(0, 50)));
+        } catch {}
+    };
+
+    /* ---- settings: call history, theme style, wallpaper, bubble style ---- */
+    const hist = el('div', { className: 'modal-overlay hidden', id: 'callHistoryModal' });
+    const hbox = el('div', { className: 'modal convo-dialog' }); hist.appendChild(hbox); document.body.appendChild(hist);
+    hist.addEventListener('click', e => { if (e.target === hist) hist.classList.add('hidden'); });
+    const fmt = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : s + 's';
+    function showHistory() {
+        const log = JSON.parse(localStorage.getItem('xchat_calllog') || '[]'); hbox.innerHTML = '';
+        hbox.append(el('h3', { textContent: 'Call history' }));
+        if (!log.length) hbox.append(el('p', { textContent: 'No calls yet.' }));
+        log.forEach(c => hbox.append(el('div', { className: 'detail-list-item', textContent: `${c.video ? '🎥' : '📞'} ${c.room} · ${new Date(c.at).toLocaleString()} · ${fmt(c.dur)} · up to ${c.peak} ${c.peak === 1 ? 'person' : 'people'}` })));
+        hbox.append(el('button', { className: 'ios-btn', type: 'button', textContent: 'Close', onclick: () => hist.classList.add('hidden') })); hist.classList.remove('hidden');
+    }
+    const anchor = byId('clearAllDataBtn').closest('.settings-option');
+    const row = (title, sub, ctl) => el('div', { className: 'settings-option' }, el('div', {}, el('strong', { textContent: title }), el('span', { textContent: sub })), ctl);
+    const sel = (id, opts) => { const s = el('select', { id }); opts.forEach(([v, t]) => s.appendChild(el('option', { value: v, textContent: t }))); return s; };
+    const variantSel = sel('variantSelect', [['', 'Default'], ['amoled', 'AMOLED black'], ['contrast', 'High contrast']]);
+    const wallSel = sel('wallSelect', [['', 'None'], ['aurora', 'Aurora'], ['sunset', 'Sunset'], ['forest', 'Forest'], ['dots', 'Dots'], ['custom', 'My image…']]);
+    const bubSel = sel('bubbleSelect', [['', 'Rounded'], ['square', 'Square'], ['minimal', 'Minimal']]);
+    const wallFile = el('input', { type: 'file', accept: 'image/*', hidden: true });
+    anchor.before(row('Theme style', 'AMOLED black or high contrast', variantSel), row('Chat wallpaper', 'Background behind messages', wallSel), row('Bubble style', 'Shape of message bubbles', bubSel), wallFile,
+        row('Call history', 'Your past calls and how long they lasted', el('button', { className: 'ios-btn ios-btn-secondary', type: 'button', textContent: 'View', onclick: showHistory })));
+    const WALLS = { aurora: 'linear-gradient(135deg,#0f2027,#203a43,#2c5364)', sunset: 'linear-gradient(160deg,#ff9a8b,#ff6a88,#ff99ac)', forest: 'linear-gradient(160deg,#134e5e,#71b280)', dots: 'radial-gradient(circle at 1px 1px,rgba(127,127,127,.35) 1px,transparent 0) 0 0/22px 22px, var(--chat-bg,#fff)' };
+    function applyLook() {
+        const g = k => localStorage.getItem(k) || '';
+        variantSel.value = g('xchat_ui_variant'); wallSel.value = g('xchat_ui_wall'); bubSel.value = g('xchat_ui_bubble');
+        root.dataset.variant = variantSel.value; root.dataset.bubble = bubSel.value;
+        const w = wallSel.value, img = g('xchat_ui_wallimg');
+        const val = w === 'custom' && img ? `center/cover url(${img})` : WALLS[w];
+        if (val) { root.dataset.wall = w; root.style.setProperty('--wall', val); } else { delete root.dataset.wall; root.style.removeProperty('--wall'); }
+        if (!root.dataset.variant) delete root.dataset.variant; if (!root.dataset.bubble) delete root.dataset.bubble;
+    }
+    variantSel.addEventListener('change', () => {
+        localStorage.setItem('xchat_ui_variant', variantSel.value);
+        if (variantSel.value === 'amoled') { root.dataset.theme = 'dark'; localStorage.setItem('xchat_theme', 'dark'); }
+        applyLook();
+    });
+    bubSel.addEventListener('change', () => { localStorage.setItem('xchat_ui_bubble', bubSel.value); applyLook(); });
+    wallSel.addEventListener('change', () => { localStorage.setItem('xchat_ui_wall', wallSel.value); if (wallSel.value === 'custom' && !localStorage.getItem('xchat_ui_wallimg')) wallFile.click(); applyLook(); });
+    wallFile.addEventListener('change', () => {
+        const f = wallFile.files[0]; if (!f) return; const im = new Image(), u = URL.createObjectURL(f);
+        im.onload = () => {
+            const k = Math.min(1, 1280 / Math.max(im.width, im.height)), c = el('canvas', { width: im.width * k, height: im.height * k });
+            c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(u);
+            try { localStorage.setItem('xchat_ui_wallimg', c.toDataURL('image/jpeg', .7)); localStorage.setItem('xchat_ui_wall', 'custom'); } catch { alert('That image is too large to save.'); }
+            applyLook(); wallFile.value = '';
+        }; im.src = u;
+    });
+    applyLook();
+})();
+</script>
+
+<style id="convo-upgrades3-css">
+  #fmtBar { display: flex; gap: 4px; padding: 4px 14px 0; }
+  #fmtBar button { border: 0; border-radius: 6px; padding: 2px 9px; font-size: .78rem; font-weight: 700; cursor: pointer; background: rgba(127,127,127,.18); color: var(--text-color); }
+  #stickerPanel { position: fixed; z-index: 60; width: min(320px, 92vw); display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; padding: 10px; border-radius: 14px; background: var(--input-bg); border: 1px solid var(--input-border); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  #stickerPanel.hidden, #pinBar.hidden, #selBar.hidden { display: none; }
+  #stickerPanel button { border: 0; background: transparent; font-size: 1.7rem; cursor: pointer; border-radius: 8px; }
+  #stickerPanel button:hover { background: var(--hover-bg); }
+  #stickerPanel button.gif { grid-column: 1 / -1; font-size: .85rem; padding: 8px; color: var(--text-color); }
+  .bubble.sticker-b { background: transparent !important; box-shadow: none !important; border: 0 !important; font-size: 2.8rem; line-height: 1.15; padding: 2px 6px; }
+  #pinBar { padding: 7px 14px; font-size: .8rem; cursor: pointer; border-bottom: 1px solid var(--sidebar-border); background: var(--input-bg); color: var(--text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+  #selBar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 35; display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: var(--primary); color: #fff; }
+  #selBar span { flex: 1; font-weight: 700; } #selBar button { border: 0; border-radius: 99px; padding: 7px 12px; cursor: pointer; font-weight: 700; }
+  .selecting .message-wrapper:not(.system) { cursor: pointer; } .message-wrapper.sel { background: rgba(0,122,255,.2); border-radius: 10px; }
+  .edited-label { cursor: pointer; text-decoration: underline dotted; }
+  #unreadDivider { color: #ff3b30; font-weight: 700; }
+  #folderBar { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 12px; }
+  #folderBar button { border: 0; border-radius: 99px; padding: 3px 11px; font-size: .74rem; cursor: pointer; background: rgba(127,127,127,.18); color: var(--text-color); }
+  #folderBar button.on { background: var(--primary); color: #fff; }
+  #presenceList { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .sheet-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; font-size: .88rem; }
+  .sheet-row button { white-space: nowrap; }
+</style>
+<script id="convo-upgrades3">
+(function () {
+    'use strict';
+    const byId = id => document.getElementById(id), root = document.documentElement;
+    const el = (tag, props = {}, ...kids) => { const n = Object.assign(document.createElement(tag), props); n.append(...kids); return n; };
+    const xsend = p => { if (isHost) broadcastPacket(p, null); else if (hostConnection?.open) hostConnection.send(p); };
+    const wrapOf = id => [...messagesBox.querySelectorAll('.message-wrapper')].find(w => w.dataset.msgId === id);
+    const roomOf = id => convoRooms.find(r => r.id === id);
+    const rid8 = () => 'msg_' + Math.random().toString(36).slice(2, 9);
+    const btn = (t, fn, cls = 'ios-btn ios-btn-secondary') => el('button', { type: 'button', className: cls, textContent: t, onclick: fn });
+
+    /* shared sheet dialog */
+    const sheet = el('div', { className: 'modal-overlay hidden', id: 'sheetModal' }), sbox = el('div', { className: 'modal convo-dialog' });
+    sheet.append(sbox); document.body.appendChild(sheet); sheet.addEventListener('click', e => { if (e.target === sheet) sheet.classList.add('hidden'); });
+    function openSheet(title, ...nodes) { sbox.innerHTML = ''; sbox.append(el('h3', { textContent: title }), ...nodes, btn('Close', () => sheet.classList.add('hidden'), 'ios-btn')); sheet.classList.remove('hidden'); }
+
+    /* ---- formatting toolbar + :emoji: shortcodes ---- */
+    function wrapSel(a, b) { const i = messageInput, s = i.selectionStart, e = i.selectionEnd; i.value = i.value.slice(0, s) + a + i.value.slice(s, e) + b + i.value.slice(e); i.focus(); i.setSelectionRange(s + a.length, e + a.length); }
+    const fmt = el('div', { id: 'fmtBar' }); [['B', '**'], ['I', '_'], ['S', '~'], ['</>', '`']].forEach(([t, m]) => fmt.append(btn(t, () => wrapSel(m, m), ''))); chatForm.parentNode.insertBefore(fmt, chatForm);
+    messageInput.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'b' || e.key === 'i')) { e.preventDefault(); wrapSel(e.key === 'b' ? '**' : '_', e.key === 'b' ? '**' : '_'); } });
+    const EMO = { fire: '🔥', heart: '❤️', smile: '😄', joy: '😂', thumbsup: '👍', '+1': '👍', clap: '👏', tada: '🎉', eyes: '👀', rocket: '🚀', '100': '💯', pray: '🙏', cry: '😢', sob: '😭', wink: '😉', cool: '😎', think: '🤔', party: '🥳', skull: '💀', sparkles: '✨', star: '⭐', check: '✅', x: '❌', warning: '⚠️', coffee: '☕', pizza: '🍕', beer: '🍺', cake: '🎂', sun: '☀️', moon: '🌙', zzz: '😴', wave: '👋', ok: '👌', muscle: '💪', brain: '🧠', ghost: '👻', robot: '🤖', dog: '🐶', cat: '🐱' };
+    messageInput.addEventListener('input', () => {
+        const v = messageInput.value, n = v.replace(/:([a-z0-9_+]{1,12}):/g, (m, k) => EMO[k] || m);
+        if (n !== v) { const c = messageInput.selectionStart + n.length - v.length; messageInput.value = n; messageInput.setSelectionRange(c, c); }
+    });
+
+    /* ---- stickers & GIF-by-link ---- */
+    const stk = el('button', { type: 'button', className: 'plus-btn', id: 'stickerBtn', title: 'Stickers & GIFs', textContent: '🖼' }); byId('micBtn').before(stk);
+    const SP = el('div', { id: 'stickerPanel', className: 'hidden' });
+    ['😀', '😂', '🥰', '😎', '🤯', '😭', '😡', '🥳', '👍', '👎', '👏', '🙏', '🔥', '💯', '🎉', '❤️', '💔', '👀', '🚀', '🍕', '☕', '🐶', '🐱', '🦄'].forEach(s => SP.append(btn(s, () => { SP.classList.add('hidden'); sendCustom({ text: s, sticker: true }); }, '')));
+    SP.append(btn('GIF from a link…', () => { SP.classList.add('hidden'); const u = (prompt('Paste a GIF or image link (https://…)') || '').trim(); if (/^https?:\/\//i.test(u)) sendCustom({ text: u }); }, 'gif'));
+    document.body.appendChild(SP);
+    stk.addEventListener('click', () => { const r = stk.getBoundingClientRect(); SP.style.left = Math.max(8, Math.min(r.left, innerWidth - 330)) + 'px'; SP.style.bottom = (innerHeight - r.top + 8) + 'px'; SP.classList.toggle('hidden'); });
+    document.addEventListener('click', e => { if (!SP.contains(e.target) && e.target !== stk) SP.classList.add('hidden'); });
+
+    /* ---- star, forward, message-menu items ---- */
+    const SK = 'xchat_stars', stars = () => { try { return JSON.parse(localStorage.getItem(SK) || '[]'); } catch { return []; } };
+    function toggleStar(m) {
+        let s = stars();
+        if (s.some(x => x.id === m.id)) s = s.filter(x => x.id !== m.id);
+        else s.unshift({ id: m.id, rid: visibleRoomId, room: roomOf(visibleRoomId)?.name, from: m.sender?.displayName, text: m.text || ('📎 ' + m.fileName), at: m.timestamp });
+        localStorage.setItem(SK, JSON.stringify(s.slice(0, 200)));
+    }
+    function showStars() {
+        const s = stars();
+        openSheet('⭐ Starred messages', ...(s.length ? s.map(x => el('div', { className: 'sheet-row' }, el('span', { textContent: `${x.from || ''} · ${x.room || ''}: ${x.text}` }),
+            btn('Open', () => { sheet.classList.add('hidden'); const r = roomOf(x.rid); if (r) { activateConversation(r); setTimeout(() => { const w = wrapOf(x.id); w?.scrollIntoView({ block: 'center' }); w?.classList.add('search-highlight'); setTimeout(() => w?.classList.remove('search-highlight'), 2200); }, 300); } }),
+            btn('✕', () => { localStorage.setItem(SK, JSON.stringify(stars().filter(y => y.id !== x.id))); showStars(); }))) : [el('p', { textContent: 'Nothing starred yet. Open a message menu and choose Star.' })]));
+    }
+    function chooseRoom(title, cb) {
+        const list = convoRooms.filter(r => r.id === visibleRoomId || roomSessions.has(r.id)).map(r => btn((r.type === 'public' ? '🌐 ' : '🔒 ') + r.name, () => { sheet.classList.add('hidden'); cb(r); }));
+        openSheet(title, ...(list.length ? list : [el('p', { textContent: 'No chats are open yet.' })]));
+    }
+    function fwdTo(room, msgs) {
+        runInRoomSession(room.id, () => {
+            if (!peer?.open) { alert('That chat is not connected right now.'); return; }
+            msgs.forEach(m => {
+                const p = { ...m, id: rid8(), sender: currentUser, timestamp: Date.now(), time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), replyTo: null };
+                ['reactions', 'history', 'expires', 'poll', 'readBy', 'edited'].forEach(k => delete p[k]);
+                if (p.type === 'CHAT') p.text = '↪ ' + p.text;
+                messageLog.push(p); xsend(p); if (room.id === visibleRoomId) (p.type === 'FILE' ? appendFileMessage : appendMessage)(p, 'sent');
+            });
+            persistRoomHistory(room.id, isHost); const r = roomOf(room.id); if (r) { r.lastActivity = Date.now(); persistConversationList(); }
+        });
+        renderConversationList();
+    }
+    const mkItem = (label, fn) => el('div', { className: 'context-menu-item', textContent: label, onclick: () => { const t = contextTargetPacket; bubbleContextMenu.classList.add('hidden'); if (t) fn(t); } });
+    byId('ctxMenuCopy').after(mkItem('➡ Forward', t => chooseRoom('Forward to…', r => fwdTo(r, [t]))), mkItem('⭐ Star / unstar', toggleStar));
+
+    /* ---- multi-select ---- */
+    let selMode = false;
+    const selBar = el('div', { id: 'selBar', className: 'hidden' }), selCnt = el('span');
+    const selIds = () => [...messagesBox.querySelectorAll('.message-wrapper.sel')].map(w => w.dataset.msgId);
+    const selMsgs = () => { const ids = selIds(); return messageLog.filter(m => ids.includes(m.id)); };
+    const updSel = () => { selCnt.textContent = selIds().length + ' selected'; };
+    function setSel(on) { selMode = on; selBar.classList.toggle('hidden', !on); if (!on) messagesBox.querySelectorAll('.sel').forEach(w => w.classList.remove('sel')); messagesBox.classList.toggle('selecting', on); updSel(); }
+    messagesBox.addEventListener('click', e => {
+        if (!selMode) return; const w = e.target.closest('.message-wrapper:not(.system)'); if (!w) return;
+        e.preventDefault(); e.stopImmediatePropagation(); w.classList.toggle('sel'); updSel();
+    }, true);
+    selBar.append(selCnt,
+        btn('Copy', () => { navigator.clipboard?.writeText(selMsgs().map(m => `${m.sender?.displayName}: ${m.text || m.fileName}`).join('\n')); setSel(false); }, ''),
+        btn('⭐', () => { selMsgs().forEach(toggleStar); setSel(false); }, ''),
+        btn('Forward', () => { const ms = selMsgs(); if (ms.length) chooseRoom('Forward to…', r => { fwdTo(r, ms); setSel(false); }); }, ''),
+        btn('Delete', () => {
+            const mine = selMsgs().filter(m => m.sender?.username === currentUser.username);
+            if (!mine.length) { alert('You can only delete your own messages.'); return; }
+            if (!confirm(`Delete ${mine.length} message(s) for everyone?`)) return;
+            mine.forEach(m => { messageLog = messageLog.filter(x => x.id !== m.id); wrapOf(m.id)?.remove(); xsend({ type: 'DELETE', id: m.id, sender: currentUser }); });
+            persistRoomHistory(activeRoomId, isHost); setSel(false);
+        }, ''), btn('✕', () => setSel(false), ''));
+    messagesBox.parentNode.appendChild(selBar);
+    byId('searchBtn').before(el('button', { id: 'starsBtn', type: 'button', className: 'icon-button', title: 'Starred messages', textContent: '⭐', onclick: showStars }),
+        el('button', { id: 'selBtn', type: 'button', className: 'icon-button', title: 'Select messages', textContent: '☑', onclick: () => setSel(!selMode) }));
+
+    /* ---- sticker look, pinned banner, edit history ---- */
+    const _am = appendMessage;
+    appendMessage = function (m, t) {
+        _am(m, t); const w = messagesBox.lastElementChild; if (!w || w.dataset.msgId !== m.id) return;
+        if (m.sticker || /^(\p{Extended_Pictographic}\uFE0F?){1,3}$/u.test((m.text || '').trim())) w.querySelector('.bubble')?.classList.add('sticker-b');
+    };
+    const pinBar = el('div', { id: 'pinBar', className: 'hidden' }); byId('chatSearchBar').before(pinBar);
+    let lastPin = null;
+    setInterval(() => {
+        const r = roomOf(visibleRoomId), p = r?.pinned?.length ? r.pinned[r.pinned.length - 1] : null, key = p ? p.id + (p.text || '') : '';
+        if (key === lastPin) return; lastPin = key; pinBar.classList.toggle('hidden', !p);
+        if (p) { pinBar.textContent = '📌 ' + (p.sender?.displayName || '') + ': ' + (p.text || p.fileName || 'Attachment'); pinBar.onclick = () => wrapOf(p.id)?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    }, 700);
+    const seen = new Map();
+    setInterval(() => {
+        let ch = false;
+        messageLog.forEach(m => { if (m.type !== 'CHAT') return; const o = seen.get(m.id); if (o !== undefined && o !== m.text && m.edited) { (m.history = m.history || []).push(o); ch = true; } seen.set(m.id, m.text); });
+        if (ch) persistRoomHistory(activeRoomId, isHost);
+    }, 500);
+    messagesBox.addEventListener('click', e => {
+        const lab = e.target.closest('.edited-label'); if (!lab || selMode) return;
+        const m = messageLog.find(x => x.id === lab.closest('.message-wrapper')?.dataset.msgId); if (!m) return;
+        const h = [...(m.history || [])].reverse();
+        openSheet('Edit history', el('div', { className: 'sheet-row', textContent: 'Now: ' + m.text }), ...(h.length ? h.map(t => el('div', { className: 'sheet-row', textContent: 'Before: ' + t })) : [el('p', { textContent: 'No earlier versions were saved.' })]));
+    });
+
+    /* ---- unread divider (+ lastRead bookkeeping) ---- */
+    setInterval(() => { if (visibleRoomId && document.hasFocus()) localStorage.setItem('xchat_lastread_' + visibleRoomId, String(Date.now())); }, 3000);
+    const _act = activateConversation;
+    activateConversation = function (room, first) {
+        if (!room || (room.id === visibleRoomId && !first)) return _act(room, first);
+        const prev = visibleRoomId; if (prev && prev !== room.id) localStorage.setItem('xchat_lastread_' + prev, String(Date.now()));
+        const lr = +localStorage.getItem('xchat_lastread_' + room.id) || 0;
+        _act(room, first); lastPin = null; setSel(false);
+        if (lr) { const f = messageLog.find(m => m.timestamp > lr && m.sender?.username !== currentUser.username && m.type !== 'SYSTEM'), w = f && wrapOf(f.id); if (w) { w.before(el('div', { className: 'date-divider', id: 'unreadDivider', textContent: 'New messages' })); w.scrollIntoView({ block: 'center' }); } }
+    };
+
+    /* ---- chat folders & archive ---- */
+    let showArch = false, folder = '';
+    const fBar = el('div', { id: 'folderBar' }); chatListContainer.before(fBar);
+    function renderFolders() {
+        fBar.innerHTML = ''; const names = [...new Set(convoRooms.filter(r => r.folder && !r.archived).map(r => r.folder))], na = convoRooms.filter(r => r.archived).length;
+        const chip = (t, on, fn) => { const b = btn(t, fn, on ? 'on' : ''); fBar.appendChild(b); };
+        if (!names.length && !na) { fBar.style.display = 'none'; return; } fBar.style.display = '';
+        chip('All', !showArch && !folder, () => { showArch = false; folder = ''; renderConversationList(); });
+        names.forEach(n => chip('📁 ' + n, !showArch && folder === n, () => { showArch = false; folder = n; renderConversationList(); }));
+        if (na) chip('🗄 Archived (' + na + ')', showArch, () => { showArch = true; folder = ''; renderConversationList(); });
+    }
+    const _rcl = renderConversationList;
+    renderConversationList = function () {
+        _rcl();
+        chatListContainer.querySelectorAll('.chat-list-item').forEach(it => { const r = roomOf(it.dataset.roomId); if (r) it.style.display = (showArch ? !r.archived : (r.archived || (folder && r.folder !== folder))) ? 'none' : ''; });
+        renderFolders();
+    };
+    chatContextMenu.append(el('div', { className: 'menu-divider' }), el('button', { type: 'button', textContent: '📁 Move to folder…' }), el('button', { type: 'button', textContent: '🗄 Archive' }));
+    const [fBtn, aBtn] = [...chatContextMenu.querySelectorAll('button')].slice(-2); fBtn.dataset.xaction = 'folder'; aBtn.dataset.xaction = 'archive';
+    chatContextMenu.addEventListener('click', e => {
+        const b = e.target.closest('[data-xaction]'); if (!b || !chatContextRoom) return; const r = chatContextRoom;
+        if (b.dataset.xaction === 'archive') r.archived = !r.archived;
+        else { const f = prompt('Folder name (leave empty to remove from its folder):', r.folder || ''); if (f !== null) { if (f.trim()) r.folder = f.trim(); else delete r.folder; } }
+        persistConversationList(); hideChatContextMenu(); renderConversationList();
+    }, true);
+    const _scm = showChatContextMenu;
+    showChatContextMenu = function (room, x, y) { _scm(room, x, y); aBtn.textContent = room.archived ? '📤 Unarchive' : '🗄 Archive'; };
+    renderConversationList();
+
+    /* ---- picture-in-picture for calls ---- */
+    async function pip() {
+        if (document.pictureInPictureElement) { document.exitPictureInPicture(); return; }
+        const v = [...callGrid.querySelectorAll('.call-tile:not(.self) video')].find(x => x.srcObject);
+        try { await v.requestPictureInPicture(); } catch { alert('Picture-in-picture needs someone else on the call with video.'); }
+    }
+    byId('callControls').insertBefore(btn('🗗', pip, ''), byId('callLeaveBtn')); byId('callControls').lastElementChild.previousElementSibling.title = 'Picture-in-picture';
+    try { navigator.mediaSession.setActionHandler('enterpictureinpicture', pip); } catch {}
+
+    /* ---- notification click = jump in and reply ---- */
+    window.desktopNotify = function (packet, room) {
+        if (!('Notification' in window) || Notification.permission !== 'granted' || localStorage.getItem('xchat_desktop_notifications') === 'false') return;
+        if (room && room.id === visibleRoomId && document.hasFocus() && !document.hidden) return;
+        try {
+            const n = new Notification((packet.sender?.displayName || 'New message') + (room ? ' · ' + room.name : ''), { body: (packet.text || ('📎 ' + (packet.fileName || 'Attachment'))) + '\n↩ Click to reply', tag: 'convo-' + (room?.id || 'chat'), renotify: true });
+            n.onclick = () => {
+                window.focus(); if (room) activateConversation(room);
+                setTimeout(() => { activeReplyingMessage = packet; replyBannerText.innerText = `Replying to: "${packet.text || packet.fileName || 'Attachment'}"`; replyBanner.style.display = 'flex'; messageInput.focus(); }, 250); n.close();
+            };
+            setTimeout(() => n.close(), 8000);
+        } catch {}
+    };
+
+    /* ---- presence: online / away / last seen ---- */
+    const PK = 'xchat_presence'; let pres = {}; try { pres = JSON.parse(localStorage.getItem(PK) || '{}'); } catch {}
+    function setPres(rid, user, name, st, at) {
+        if (!user || user === currentUser.username) return; const k = rid + ':' + user;
+        pres[k] = { st: st || pres[k]?.st || 'online', at: at || Date.now(), name: name || pres[k]?.name || user };
+        try { localStorage.setItem(PK, JSON.stringify(pres)); } catch {}
+    }
+    let lastActive = Date.now(), myState = 'online';
+    ['mousemove', 'keydown', 'pointerdown', 'touchstart', 'scroll'].forEach(ev => addEventListener(ev, () => { lastActive = Date.now(); }, { passive: true, capture: true }));
+    function bcast() { convoRooms.forEach(r => { if (r.id === visibleRoomId || roomSessions.has(r.id)) runInRoomSession(r.id, () => { if (peer?.open) xsend({ type: 'X_PRESENCE', user: currentUser.username, name: currentUser.displayName, st: myState, at: Date.now() }); }); }); }
+    setInterval(() => { const s = Date.now() - lastActive > 120000 ? 'away' : 'online'; if (s !== myState) { myState = s; bcast(); } }, 10000);
+    setInterval(bcast, 60000); setTimeout(bcast, 4000);
+    const _hx = window.handleXPacket; window.handleXPacket = p => { if (p.type === 'X_PRESENCE') setPres(activeRoomId, p.user, p.name, p.st, p.at); else _hx(p); };
+    const _hip = handleIncomingPacket; handleIncomingPacket = function (p, s) { if (p && (p.type === 'CHAT' || p.type === 'FILE')) setPres(activeRoomId, p.sender?.username, p.sender?.displayName, 'online'); _hip(p, s); };
+    const pl = el('div', { id: 'presenceList' }); participantsListContainer.after(pl);
+    const ago = t => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? 'just now' : s < 3600 ? Math.floor(s / 60) + ' min ago' : s < 86400 ? Math.floor(s / 3600) + ' h ago' : Math.floor(s / 86400) + ' d ago'; };
+    function renderPresence() {
+        pl.innerHTML = ''; const rid = activeRoomId, on = new Set();
+        onlineUsersMap.forEach(u => { const un = u.profile?.username; if (!un) return; on.add(un); const away = pres[rid + ':' + un]?.st === 'away'; pl.append(el('div', { className: 'detail-list-item', textContent: `${away ? '🌙 Away' : '🟢 Online'} · ${u.profile.displayName || un}` })); });
+        Object.entries(pres).filter(([k]) => k.startsWith(rid + ':')).forEach(([k, p]) => { if (!on.has(k.slice(rid.length + 1))) pl.append(el('div', { className: 'detail-list-item', textContent: `⚪ ${p.name} · last seen ${ago(p.at)}` })); });
+        if (pl.children.length) pl.prepend(el('strong', { textContent: 'Status' }));
+    }
+    const _rp = renderParticipantsUI; renderParticipantsUI = function () { _rp(); renderPresence(); };
+
+    /* ---- storage manager ---- */
+    const size = k => (localStorage.getItem(k) || '').length * 2, kb = n => (n / 1024).toFixed(1) + ' KB';
+    function clearRoomStore(r) {
+        localStorage.setItem('xchat_cleared_' + r.id, String(Date.now())); localStorage.removeItem('xchat_history_' + r.id); localStorage.removeItem('xchat_host_' + r.id);
+        r.lastMessage = ''; r.pinned = []; persistConversationList();
+        if (r.id === visibleRoomId || roomSessions.has(r.id)) clearChatLocal(r.id, false);
+    }
+    function showStorage() {
+        const rows = [], line = (name, k, fn) => { const b = k(); rows.push(el('div', { className: 'sheet-row' }, el('span', { textContent: name }), el('span', { textContent: kb(b) }), b ? btn('Clear', fn) : el('span'))); };
+        convoRooms.forEach(r => line((r.type === 'public' ? '🌐 ' : '🔒 ') + r.name, () => size('xchat_history_' + r.id) + size('xchat_host_' + r.id), () => { if (confirm(`Clear saved history for "${r.name}" on this device?`)) { clearRoomStore(r); showStorage(); } }));
+        [['Chat wallpaper image', 'xchat_ui_wallimg'], ['Call history', 'xchat_calllog'], ['Starred messages', 'xchat_stars']].forEach(([n, k]) => line(n, () => size(k), () => { localStorage.removeItem(k); if (k === 'xchat_ui_wallimg') { localStorage.removeItem('xchat_ui_wall'); delete root.dataset.wall; root.style.removeProperty('--wall'); } showStorage(); }));
+        const total = Object.keys(localStorage).filter(k => k.startsWith('xchat_')).reduce((a, k) => a + size(k), 0), est = el('p', { textContent: 'Convo is using ' + kb(total) + ' on this device.' });
+        navigator.storage?.estimate?.().then(e => { if (e.quota) est.textContent += ` Browser allows about ${(e.quota / 1048576).toFixed(0)} MB in total.`; });
+        openSheet('Storage', est, ...rows);
+    }
+    byId('clearAllDataBtn').closest('.settings-option').before(el('div', { className: 'settings-option' }, el('div', {}, el('strong', { textContent: 'Storage' }), el('span', { textContent: 'See what each chat uses and free up space' })), btn('Manage', showStorage)));
 })();
 </script>
 
