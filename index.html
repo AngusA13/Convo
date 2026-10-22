@@ -3803,7 +3803,7 @@
     function setupCommonPeerListeners() {
         const me = peer;
         me.on('error', err => { if (peer === me) handlePeerError(err); });
-        me.on('disconnected', () => { if (!me.destroyed) { try { me.reconnect(); } catch {} } });
+        me.on('disconnected', () => { if (!me.destroyed && window.__convoOnPeerDisconnected) window.__convoOnPeerDisconnected(me); });
 
         peer.on(
             'connection',
@@ -6630,6 +6630,342 @@
         openSheet('Storage', est, ...rows);
     }
     byId('clearAllDataBtn').closest('.settings-option').before(el('div', { className: 'settings-option' }, el('div', {}, el('strong', { textContent: 'Storage' }), el('span', { textContent: 'See what each chat uses and free up space' })), btn('Manage', showStorage)));
+})();
+</script>
+
+<style id="convo-disc-css">
+  #convoDisc { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); z-index: 100001; display: flex; align-items: center; gap: 12px; max-width: min(92vw, 440px); padding: 12px 16px 12px 18px; border-radius: 16px; background: #e5231b; color: #fff; box-shadow: 0 14px 40px rgba(229,35,27,.45), 0 2px 8px rgba(0,0,0,.3); opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, -24px) scale(.96); transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s; }
+  #convoDisc.show { opacity: 1; visibility: visible; pointer-events: auto; transform: translate(-50%, 0) scale(1); transition: opacity .18s ease, transform .18s ease; }
+  #convoDisc .cd-dot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; background: #fff; animation: convoDiscPulse 1.1s ease-in-out infinite; }
+  #convoDisc .cd-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  #convoDisc .cd-title { font-size: 1.05rem; font-weight: 800; letter-spacing: .08em; line-height: 1.15; }
+  #convoDisc .cd-sub { font-size: .78rem; opacity: .92; line-height: 1.25; }
+  #convoDisc button { flex: 0 0 auto; border: 0; border-radius: 99px; padding: 7px 13px; font-weight: 700; font-size: .78rem; cursor: pointer; color: #e5231b; background: #fff; }
+  #convoDisc button:active { transform: scale(.96); }
+  @keyframes convoDiscPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+  @media (prefers-reduced-motion: reduce) { #convoDisc, #convoDisc.show { transition: none; } #convoDisc .cd-dot { animation: none; } }
+</style>
+<script id="convo-resilience">
+/*
+ * Connection resilience:
+ *  - Red DISCONNECTED pop-up the instant the link to the chat is lost.
+ *  - Instant reconnect (no waiting), then 0.6s, 1.2s, 2.4s… capped at 10s, never gives up.
+ *  - Every attempt first tries to claim the room's host ID. If it is free, this device
+ *    becomes the host and everyone else who is disconnected reconnects to it. If it is
+ *    taken, this device joins the existing host as a client.
+ *  Note: PeerJS needs its signaling server to introduce peers, so hosting only works while
+ *  this device can still reach the internet.
+ */
+(function () {
+    'use strict';
+    if (typeof createRoomPeer !== 'function' || typeof runInRoomSession !== 'function') return;
+
+    const JOIN_TIMEOUT = 9000, ATTEMPT_TIMEOUT = 15000, CLIENT_GRACE = 2500, HOST_GRACE = 30000, MIN_SHOW_MS = 900;
+    const states = new Map();
+    let stopped = false;
+
+    /* ---------------- pop-up ---------------- */
+    const box = document.createElement('div');
+    box.id = 'convoDisc';
+    box.setAttribute('role', 'alert');
+    box.setAttribute('aria-live', 'assertive');
+    box.innerHTML = '<span class="cd-dot" aria-hidden="true"></span><div class="cd-txt"><span class="cd-title">DISCONNECTED</span><span class="cd-sub" id="convoDiscSub"></span></div><button type="button" id="convoDiscRetry">Retry now</button>';
+    document.body.appendChild(box);
+    const subEl = box.querySelector('#convoDiscSub');
+    let shownAt = 0, hideTimer = null, lastRetry = 0;
+
+    /* ---------------- helpers ---------------- */
+    function seenKey(rid) { return 'convo_seen_' + (currentUser && currentUser.username) + '_' + rid; }
+    function S(rid) {
+        let s = states.get(rid);
+        if (!s) {
+            s = { tries: 0, timer: null, joinTimer: null, connecting: false, t0: 0, bad: false, everLinked: false, seen: false, badSince: 0, waitOnline: false, lastRe: 0, note: '' };
+            try { s.seen = localStorage.getItem(seenKey(rid)) === '1'; } catch (e) {}
+            states.set(rid, s);
+        }
+        return s;
+    }
+    function sess(rid) { return rid === activeRoomId ? { peer: peer, isHost: isHost, hostConnection: hostConnection } : roomSessions.get(rid); }
+    function linkOk(rid) {
+        const s = sess(rid), p = s && s.peer;
+        if (!p || p.destroyed || p.__convoDead) return false;
+        if (s.isHost) return !!p.open;
+        const c = s.hostConnection;
+        if (!c || !c.open) return false;
+        const ice = c.peerConnection && c.peerConnection.iceConnectionState;
+        return !(ice === 'disconnected' || ice === 'failed' || ice === 'closed');
+    }
+    function kill(p) { if (!p) return; p.__convoDead = true; try { p.destroy(); } catch (e) {} }
+    function roomOf(rid) { return convoRooms.find(function (r) { return r.id === rid; }); }
+
+    /* ---------------- pop-up logic ---------------- */
+    function update() {
+        const rid = visibleRoomId;
+        let inChat = false;
+        try { inChat = !!(currentUser && currentUser.username && roomOf(rid) && getComputedStyle(setupScreen).display === 'none'); } catch (e) {}
+        let bad = false, text = '';
+        if (inChat && !stopped) {
+            const st = S(rid), offline = navigator.onLine === false, ok = linkOk(rid);
+            if (offline) { bad = true; text = 'No internet connection. Waiting for the network…'; }
+            else if (!ok && (st.bad || st.everLinked)) {
+                bad = true;
+                text = st.note || (st.connecting ? 'Looking for a connection, or hosting one if none exists…' : 'Can’t reach the chat right now. Retrying…');
+            }
+        }
+        if (bad) {
+            if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+            if (!shownAt) shownAt = Date.now();
+            subEl.textContent = text;
+            box.classList.add('show');
+        } else if (shownAt) {
+            const left = MIN_SHOW_MS - (Date.now() - shownAt);
+            if (left <= 0) { box.classList.remove('show'); shownAt = 0; }
+            else if (!hideTimer) hideTimer = setTimeout(function () { hideTimer = null; update(); }, left);
+        }
+    }
+
+    /* ---------------- connection state ---------------- */
+    function markOk(rid) {
+        const st = S(rid);
+        st.connecting = false; st.bad = false; st.tries = 0; st.badSince = 0; st.everLinked = true; st.seen = true; st.note = '';
+        clearTimeout(st.joinTimer);
+        try { localStorage.setItem(seenKey(rid), '1'); } catch (e) {}
+        update();
+    }
+    function fail(rid, statusText, note) {
+        if (stopped) return;
+        const st = S(rid);
+        st.bad = true; st.connecting = false; st.note = note || '';
+        runInRoomSession(rid, function () {
+            setConnStatus(statusText || (navigator.onLine === false ? 'Disconnected — no internet' : 'Disconnected — reconnecting…'));
+        });
+        scheduleReconnect(rid);
+        update();
+    }
+
+    /* Replaces the app's slow back-off: first retry is immediate, never gives up. */
+    scheduleReconnect = function (rid) {
+        if (stopped) return;
+        const room = roomOf(rid);
+        if (!room) return;
+        const st = S(rid);
+        if (st.timer) return;
+        if (navigator.onLine === false) { st.waitOnline = true; return; }
+        const n = st.tries++;
+        const delay = n === 0 ? 0 : Math.min(10000, 600 * Math.pow(2, n - 1)) + Math.random() * 300;
+        st.timer = setTimeout(function () { st.timer = null; reconnectNow(rid); }, delay);
+    };
+
+    function reconnectNow(rid) {
+        const room = roomOf(rid);
+        if (!room || stopped) return;
+        const st = S(rid);
+        clearTimeout(st.timer); st.timer = null; clearTimeout(st.joinTimer); st.waitOnline = false;
+        runInRoomSession(rid, function () {
+            const old = peer;
+            peer = null; isHost = false; connections = []; hostConnection = null; onlineUsersMap = new Map();
+            kill(old);
+            connectRoom(room);
+            saveRoomSession(rid);
+        });
+        update();
+    }
+
+    /* ---------------- connect: join the host, or become the host ---------------- */
+    function targetOf(room) { return room.type === 'public' ? PUBLIC_ROOM_PREFIX : room.code; }
+
+    function connectRoom(room) {
+        stopped = false;
+        const rid = room.id, st = S(rid);
+        clearTimeout(st.joinTimer);
+        st.connecting = true; st.t0 = Date.now(); st.badSince = 0;
+        // Joining a private chat for the first time with a mistyped code must not create a ghost room,
+        // so only rooms we created, or have been connected to before, may take over as host.
+        const mayHost = room.type === 'public' || !!room.creator || st.seen;
+        setConnStatus(st.everLinked || st.tries ? 'Looking for a connection…' : 'Connecting...');
+        try {
+            if (!targetOf(room)) throw new Error('missing room id');
+            const p = mayHost ? createRoomPeer(targetOf(room), peerConfig) : createRoomPeer(peerConfig);
+            p.__claim = mayHost;
+            peer = p; isHost = false; connections = []; hostConnection = null; onlineUsersMap = new Map();
+            setupCommonPeerListeners();
+            p.on('open', function (id) {
+                if (p.__convoDead || peer !== p) return;
+                p.__opened = true;
+                if (p.__claim && id === targetOf(room)) becomeHost(room, st, p);
+                else joinHost(room, st, p);
+            });
+        } catch (e) {
+            console.warn('Could not start connection', e);
+            peer = null;
+            fail(rid);
+        }
+    }
+
+    function startClient(room, st, old) {
+        const rid = room.id;
+        if (old) kill(old);
+        try {
+            const c = createRoomPeer(peerConfig);
+            c.__claim = false;
+            peer = c; isHost = false; connections = []; hostConnection = null; onlineUsersMap = new Map();
+            setupCommonPeerListeners();
+            c.on('open', function () {
+                if (c.__convoDead || peer !== c) return;
+                c.__opened = true;
+                joinHost(room, st, c);
+            });
+        } catch (e) {
+            console.warn('Could not start client', e);
+            peer = null;
+            fail(rid);
+        }
+    }
+
+    function joinHost(room, st, p) {
+        const rid = room.id;
+        isHost = false;
+        setConnStatus('Connecting...');
+        const c = p.connect(targetOf(room));
+        hostConnection = c;
+        bindEventsToRoom(c, rid);
+        setupClientConnection();
+        c.on('open', function () {
+            if (peer !== p || p.__convoDead || hostConnection !== c) return;
+            markOk(rid);
+            const pc = c.peerConnection;
+            if (pc && !pc.__convoWatched) {
+                pc.__convoWatched = true;
+                pc.addEventListener('iceconnectionstatechange', function () { update(); tick(); });
+            }
+        });
+        c.on('error', function () {
+            if (peer === p && hostConnection === c && !p.__convoDead) fail(rid);
+        });
+        clearTimeout(st.joinTimer);
+        st.joinTimer = setTimeout(function () {
+            runInRoomSession(rid, function () {
+                if (peer === p && hostConnection === c && !c.open && !p.__convoDead) fail(rid);
+            });
+        }, JOIN_TIMEOUT);
+    }
+
+    function becomeHost(room, st, p) {
+        const rid = room.id, before = st.everLinked;
+        isHost = true; hostConnection = null;
+        // Persist our local copy so people who join us can sync the history from us.
+        mergeHistoryPackets(readStoredHistory(rid, true));
+        onlineUsersMap.set(p.id, { profile: currentUser, peerId: p.id });
+        markOk(rid);
+        setConnStatus(room.type === 'public' ? 'Hosting • 1 online' : 'Hosting secure session');
+        const visible = activeRoomId === visibleRoomId;
+        if (!before && room.type === 'public') {
+            if (visible) appendSystemMessage('Connected to Public Lobby.');
+        } else if (!before && room.creator) {
+            if (visible) { appendSystemMessage('Secure room created.'); appendCodeMessage(p.id); }
+            messageLog.push({ type: 'SYSTEM', text: 'Secure room created.', code: p.id });
+        } else if (visible) {
+            appendSystemMessage('Connection restored. You are hosting this chat now, and others will reconnect to you.');
+        }
+    }
+
+    /* ---------------- errors from PeerJS ---------------- */
+    handlePeerError = function (err) {
+        const p = peer;
+        if (!p || p.__convoDead) return;
+        const room = roomOf(activeRoomId);
+        if (!room) return;
+        const st = S(room.id), t = err && err.type;
+        if (t === 'unavailable-id') {
+            // Someone already hosts this room: join them instead of hosting.
+            if (p.__claim && !p.__opened) { startClient(room, S(room.id), p); return; }
+            fail(room.id);
+            return;
+        }
+        if (t === 'peer-unavailable') {
+            if (isHost || (hostConnection && hostConnection.open)) return; // a call target vanished, the room is fine
+            fail(room.id, 'Host offline — retrying…', 'Can’t find the host of this chat. Retrying…');
+            return;
+        }
+        // A single failed media/data link must not tear down a room that is otherwise healthy.
+        if (linkOk(room.id) && !st.connecting) return;
+        fail(room.id);
+    };
+
+    /* PeerJS lost its signaling server (but not necessarily its peers). */
+    window.__convoOnPeerDisconnected = function (me) {
+        if (me.destroyed || me.__convoDead || peer !== me) return;
+        if (navigator.onLine !== false) { try { me.reconnect(); } catch (e) {} }
+        update();
+    };
+
+    /* The app calls these when a room is activated; both now share one code path. */
+    initPublicPeerConnection = function () { const r = roomOf(activeRoomId); if (r) connectRoom(r); };
+    initPeerConnection = function () { const r = roomOf(activeRoomId); if (r) connectRoom(r); };
+
+    /* ---------------- watchdog ---------------- */
+    function tick() {
+        if (stopped) return;
+        const now = Date.now();
+        convoRooms.forEach(function (room) {
+            const rid = room.id, s = sess(rid);
+            if (!s || (!s.peer && !states.has(rid))) return;
+            const st = S(rid);
+            if (st.timer || st.waitOnline) return;
+            const ok = linkOk(rid);
+            if (st.connecting) { if (now - st.t0 > ATTEMPT_TIMEOUT) fail(rid); return; }
+            if (ok) { st.badSince = 0; return; }
+            if (!st.badSince) st.badSince = now;
+            const host = !!s.isHost;
+            if (host && s.peer && s.peer.disconnected && !s.peer.destroyed && navigator.onLine !== false && now - st.lastRe > 2000) {
+                st.lastRe = now;
+                try { s.peer.reconnect(); } catch (e) {}
+            }
+            if (now - st.badSince > (host ? HOST_GRACE : CLIENT_GRACE)) fail(rid);
+        });
+        update();
+    }
+    setInterval(tick, 500);
+
+    window.addEventListener('offline', update);
+    window.addEventListener('online', function () {
+        convoRooms.forEach(function (room) {
+            const st = S(room.id);
+            st.waitOnline = false;
+            if (sess(room.id) && !linkOk(room.id)) { st.tries = 0; reconnectNow(room.id); }
+        });
+        update();
+    });
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
+    window.addEventListener('focus', tick);
+    window.addEventListener('pageshow', tick);
+
+    box.querySelector('#convoDiscRetry').addEventListener('click', function () {
+        const now = Date.now();
+        if (now - lastRetry < 800) return;
+        lastRetry = now;
+        const rid = visibleRoomId;
+        if (!roomOf(rid)) return;
+        S(rid).tries = 0;
+        reconnectNow(rid);
+    });
+
+    /* Keep the pop-up in step with the header status, and clean up on sign-out. */
+    if (typeof setConnStatus === 'function') {
+        const baseSet = setConnStatus;
+        setConnStatus = function (t) { baseSet(t); update(); };
+    }
+    if (typeof executeCleanUp === 'function') {
+        const baseClean = executeCleanUp;
+        executeCleanUp = function () {
+            stopped = true;
+            states.forEach(function (st) { clearTimeout(st.timer); clearTimeout(st.joinTimer); });
+            states.clear();
+            try { return baseClean.apply(this, arguments); } finally { update(); }
+        };
+    }
+    window.__convoNet = { update: update, tick: tick, states: states, linkOk: linkOk };
+    update();
 })();
 </script>
 
