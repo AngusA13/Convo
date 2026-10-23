@@ -4575,23 +4575,7 @@
             );
 
 
-            if (isHost) {
-
-                broadcastPacket(
-                    packet,
-                    null
-                );
-
-            } else if (
-                hostConnection &&
-                hostConnection.open
-            ) {
-
-                hostConnection.send(
-                    packet
-                );
-
-            }
+            if (window.convoDeliver) window.convoDeliver(packet); else if (isHost) { broadcastPacket(packet, null); } else if (hostConnection && hostConnection.open) { hostConnection.send(packet); }
 
 
             sidebarLastMsg.innerText =
@@ -4697,6 +4681,7 @@
                 e.target.files[0];
 
             if (!file) return;
+            if (window.__convoFileHandler) { window.__convoFileHandler(file); fileInput.value = ''; return; }
             if (file.size > 8 * 1024 * 1024) { alert('Files must be smaller than 8 MB.'); fileInput.value = ''; return; }
 
             const reader =
@@ -4798,7 +4783,7 @@
         if(!confirm('Delete this message for this conversation?')) return;
         messageLog=messageLog.filter(m=>m.id!==target.id);
         [...messagesBox.querySelectorAll('.message-wrapper')].find(el=>el.dataset.msgId===target.id)?.remove();
-        const packet={type:'DELETE',id:target.id,sender:currentUser};
+        if(window.__convoTomb) window.__convoTomb(target.id); const packet={type:'DELETE',id:target.id,sender:currentUser};
         if(isHost) broadcastPacket(packet,null); else if(hostConnection?.open) hostConnection.send(packet);
         persistRoomHistory(activeRoomId,isHost); bubbleContextMenu.classList.add('hidden');
     });
@@ -4992,7 +4977,7 @@
             receipt.className =
                 'msg-meta-receipt';
 
-            receipt.innerText = (msg.readBy && msg.readBy.length) ? 'Read' : 'Sent';
+            receipt.innerText = window.__convoRcptText ? window.__convoRcptText(msg) : ((msg.readBy && msg.readBy.length) ? 'Read' : 'Sent'); if (msg.pending) receipt.classList.add('convo-pending');
             receipt.dataset.msgId = msg.id;
             wrapper.appendChild(receipt);
 
@@ -6685,7 +6670,7 @@
         }
         return s;
     }
-    function sess(rid) { return rid === activeRoomId ? { peer: peer, isHost: isHost, hostConnection: hostConnection } : roomSessions.get(rid); }
+    function sess(rid) { return rid === activeRoomId ? { peer: peer, isHost: isHost, hostConnection: hostConnection, connections: connections, onlineUsersMap: onlineUsersMap, messageLog: messageLog } : roomSessions.get(rid); }
     function linkOk(rid) {
         const s = sess(rid), p = s && s.peer;
         if (!p || p.destroyed || p.__convoDead) return false;
@@ -6752,9 +6737,23 @@
         if (st.timer) return;
         if (navigator.onLine === false) { st.waitOnline = true; return; }
         const n = st.tries++;
-        const delay = n === 0 ? 0 : Math.min(10000, 600 * Math.pow(2, n - 1)) + Math.random() * 300;
+        const delay = n === 0 ? takeoverDelay(rid, room) : Math.min(10000, 600 * Math.pow(2, n - 1)) + Math.random() * 300;
         st.timer = setTimeout(function () { st.timer = null; reconnectNow(rid); }, delay);
     };
+
+    /* Members are listed in the order they joined, so the longest-standing member claims the host spot
+       at once and everyone else waits a beat (then joins them) instead of all racing together. */
+    function takeoverDelay(rid, room) {
+        try {
+            const s = sess(rid);
+            if (!s || !s.onlineUsersMap || !s.peer) return 0;
+            const hostId = targetOf(room), me = s.peer.id;
+            const order = Array.from(s.onlineUsersMap.keys()).filter(function (k) { return k !== hostId; });
+            let rank = order.indexOf(me);
+            if (rank < 0) rank = order.length;
+            return rank === 0 ? 0 : Math.min(2500, 450 * rank);
+        } catch (e) { return 0; }
+    }
 
     function reconnectNow(rid) {
         const room = roomOf(rid);
@@ -6833,6 +6832,7 @@
         c.on('open', function () {
             if (peer !== p || p.__convoDead || hostConnection !== c) return;
             markOk(rid);
+            if (window.__convoOnLinked) { try { window.__convoOnLinked(rid); } catch (e) { console.warn(e); } }
             const pc = c.peerConnection;
             if (pc && !pc.__convoWatched) {
                 pc.__convoWatched = true;
@@ -6858,6 +6858,7 @@
         onlineUsersMap.set(p.id, { profile: currentUser, peerId: p.id });
         markOk(rid);
         setConnStatus(room.type === 'public' ? 'Hosting • 1 online' : 'Hosting secure session');
+        if (window.__convoOnHosting) { try { window.__convoOnHosting(rid); } catch (e) { console.warn(e); } }
         const visible = activeRoomId === visibleRoomId;
         if (!before && room.type === 'public') {
             if (visible) appendSystemMessage('Connected to Public Lobby.');
@@ -6964,8 +6965,810 @@
             try { return baseClean.apply(this, arguments); } finally { update(); }
         };
     }
-    window.__convoNet = { update: update, tick: tick, states: states, linkOk: linkOk };
+    window.__convoNet = { update: update, tick: tick, states: states, linkOk: linkOk, sess: sess, fail: fail, reconnectNow: reconnectNow, takeoverDelay: takeoverDelay, targetOf: targetOf };
     update();
+})();
+</script>
+
+<style id="convo-upg4-css">
+  .msg-meta-receipt { cursor: pointer; }
+  .msg-meta-receipt.convo-pending { color: #d98200 !important; }
+  .convo-fx { margin-top: 6px; font-size: .74rem; min-width: 160px; }
+  .convo-fx:empty { display: none; }
+  .convo-bar { height: 6px; border-radius: 99px; background: rgba(127,127,127,.28); overflow: hidden; margin-bottom: 4px; }
+  .convo-bar > i { display: block; height: 100%; width: 0; background: #34c759; border-radius: 99px; transition: width .12s linear; }
+  .convo-fx button { border: 0; border-radius: 99px; padding: 5px 11px; font-size: .74rem; font-weight: 700; cursor: pointer; background: rgba(127,127,127,.25); color: inherit; }
+  .convo-fx .convo-err { opacity: .85; }
+  .bubble img { max-width: 100%; border-radius: 10px; }
+  .convo-older-wrap { display: flex; justify-content: center; padding: 8px 0 12px; }
+  .convo-older-wrap button { border: 1px solid rgba(127,127,127,.35); background: rgba(127,127,127,.12); color: inherit; border-radius: 99px; padding: 7px 16px; font-size: .78rem; font-weight: 600; cursor: pointer; }
+  .convo-older-wrap button:disabled { opacity: .6; cursor: default; }
+  #convoRcptPop { position: fixed; z-index: 100002; min-width: 190px; max-width: min(88vw, 300px); padding: 10px 12px; border-radius: 14px; background: #1c1c1e; color: #fff; font-size: .8rem; box-shadow: 0 12px 34px rgba(0,0,0,.4); display: none; }
+  #convoRcptPop.show { display: block; }
+  #convoRcptPop h4 { margin: 0 0 6px; font-size: .78rem; opacity: .75; font-weight: 600; }
+  #convoRcptPop .rp-row { display: flex; justify-content: space-between; gap: 14px; padding: 3px 0; }
+  #convoRcptPop .rp-row span:last-child { opacity: .75; white-space: nowrap; }
+  #convoSearchPanel { display: none; margin-top: 8px; max-height: 46vh; overflow: auto; border: 1px solid rgba(127,127,127,.3); border-radius: 14px; background: rgba(127,127,127,.1); }
+  #convoSearchPanel.show { display: block; }
+  #convoSearchPanel .sr-head { padding: 8px 12px; font-size: .72rem; opacity: .7; font-weight: 600; }
+  #convoSearchPanel .sr-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: inherit; padding: 9px 12px; cursor: pointer; border-top: 1px solid rgba(127,127,127,.18); font: inherit; }
+  #convoSearchPanel .sr-item:hover, #convoSearchPanel .sr-item:focus-visible { background: rgba(127,127,127,.18); outline: 0; }
+  #convoSearchPanel .sr-meta { display: flex; justify-content: space-between; gap: 8px; font-size: .68rem; opacity: .7; margin-bottom: 2px; }
+  #convoSearchPanel .sr-text { font-size: .8rem; overflow-wrap: anywhere; }
+  #convoSearchPanel mark { background: #ffd24a; color: #111; border-radius: 3px; padding: 0 1px; }
+</style>
+<script id="convo-upgrades4">
+/*
+ * Upgrades: outgoing queue, 1s heartbeat, ranked host takeover (see resilience script), history merge on
+ * reconnect, per-person delivered/seen, chunked file transfer with progress, IndexedDB archive
+ * (unlimited history), search across every chat.
+ */
+(function () {
+    'use strict';
+    const net = window.__convoNet;
+    if (!net || typeof handleIncomingPacket !== 'function' || typeof runInRoomSession !== 'function') return;
+
+    const sess = net.sess;
+    const U = function () { return currentUser && currentUser.username; };
+    const sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+    const roomOf = function (rid) { return convoRooms.find(function (r) { return r.id === rid; }); };
+    const rand = function () { return Math.random().toString(36).slice(2, 9); };
+    const CHUNK = 15 * 1024, MAX_FILE = 25 * 1024 * 1024, HIGH = 512 * 1024, DEAD_MS = 3200, RESEND_MS = 6000;
+    const MAX_CHUNKS = Math.ceil(MAX_FILE / CHUNK) + 2;
+    const memFiles = new Map(), urls = new Map(), xfers = new Map(), incoming = new Map(), uploading = new Set(), attemptAt = new Map(), fileTries = new Map(), hb = new Map();
+
+    /* ================= IndexedDB ================= */
+    let dbp = null, idbDead = false;
+    function idb() {
+        if (dbp) return dbp;
+        dbp = new Promise(function (res, rej) {
+            try {
+                if (!window.indexedDB) throw new Error('IndexedDB unavailable');
+                const r = indexedDB.open('convo_db', 1);
+                r.onupgradeneeded = function () {
+                    const d = r.result;
+                    const m = d.createObjectStore('messages', { keyPath: 'k' });
+                    m.createIndex('room_ts', ['rid', 'ts']);
+                    d.createObjectStore('files', { keyPath: 'fid' });
+                };
+                r.onsuccess = function () { const d = r.result; d.onversionchange = function () { d.close(); dbp = null; }; res(d); };
+                r.onerror = function () { rej(r.error); };
+                r.onblocked = function () { rej(new Error('blocked')); };
+            } catch (e) { rej(e); }
+        });
+        dbp.catch(function () { idbDead = true; });
+        return dbp;
+    }
+    function tx(store, mode, work) {
+        if (idbDead) return Promise.reject(new Error('IndexedDB unavailable'));
+        return idb().then(function (d) {
+            return new Promise(function (res, rej) {
+                const t = d.transaction(store, mode);
+                let out;
+                try { out = work(t.objectStore(store), t); } catch (e) { rej(e); return; }
+                t.oncomplete = function () { res(out && !Array.isArray(out) && 'result' in out ? out.result : out); };
+                t.onerror = function () { rej(t.error); };
+                t.onabort = function () { rej(t.error); };
+            });
+        });
+    }
+    const putMsgs = function (recs) { return tx('messages', 'readwrite', function (s) { recs.forEach(function (r) { s.put(r); }); }); };
+    const delMsg = function (rid, id) { return tx('messages', 'readwrite', function (s) { s.delete(rid + '|' + id); }); };
+    const clearRoomDB = function (rid) {
+        return tx('messages', 'readwrite', function (s) {
+            const rq = s.index('room_ts').openKeyCursor(IDBKeyRange.bound([rid, 0], [rid, Number.MAX_SAFE_INTEGER]));
+            rq.onsuccess = function () { const c = rq.result; if (c) { s.delete(c.primaryKey); c.continue(); } };
+        });
+    };
+    const olderRows = function (rid, before, limit) {
+        return tx('messages', 'readonly', function (s) {
+            const out = { result: [] };
+            const rq = s.index('room_ts').openCursor(IDBKeyRange.bound([rid, 0], [rid, before], false, true), 'prev');
+            rq.onsuccess = function () { const c = rq.result; if (c && out.result.length < limit) { out.result.push(c.value); c.continue(); } };
+            return out;
+        });
+    };
+    const putFile = function (fid, blob, meta) { return tx('files', 'readwrite', function (s) { s.put(Object.assign({ fid: fid, blob: blob }, meta || {})); }); };
+    const getFile = function (fid) { return tx('files', 'readonly', function (s) { return s.get(fid); }); };
+    const scanAll = function (match, cap) {
+        return tx('messages', 'readonly', function (s) {
+            const out = { result: [] };
+            const rq = s.openCursor();
+            rq.onsuccess = function () { const c = rq.result; if (c) { if (match(c.value) && out.result.length < cap) out.result.push(c.value); c.continue(); } };
+            return out;
+        });
+    };
+
+    /* ---- archive: every message is copied into IndexedDB; localStorage keeps the 500 newest as a fast cache ---- */
+    const archived = new Map(), archQ = new Map(), archT = new Map();
+    const isArchivable = function (m) { return m && (m.type === 'CHAT' || m.type === 'FILE') && m.id && (m.timestamp || 0) > 0; };
+    function record(rid, m) {
+        const p = Object.assign({}, m); delete p.fileData;
+        return { k: rid + '|' + m.id, rid: rid, ts: m.timestamp || 0, p: p };
+    }
+    function flushArchive(rid) {
+        const snap = archQ.get(rid); archQ.delete(rid); clearTimeout(archT.get(rid)); archT.delete(rid);
+        if (!snap || !snap.length) return Promise.resolve();
+        let set = archived.get(rid); if (!set) { set = new Set(); archived.set(rid, set); }
+        const tail = snap.length - 60, recs = [];
+        snap.forEach(function (m, i) { if (!set.has(m.id) || i >= tail) recs.push(record(rid, m)); });
+        if (!recs.length) return Promise.resolve();
+        return putMsgs(recs).then(function () { recs.forEach(function (r) { set.add(r.p.id); }); }).catch(function (e) { console.warn('archive write failed', e && (e.name || e)); });
+    }
+    function queueArchive(rid) {
+        try { archQ.set(rid, (messageLog || []).filter(isArchivable)); } catch (e) { return; }
+        clearTimeout(archT.get(rid));
+        archT.set(rid, setTimeout(function () { flushArchive(rid); }, 400));
+    }
+    if (typeof persistRoomHistory === 'function') {
+        const basePersist = persistRoomHistory;
+        persistRoomHistory = function (roomId, asHost) {
+            if (roomId === undefined) roomId = activeRoomId;
+            if (asHost === undefined) asHost = isHost;
+            queueArchive(roomId);
+            return basePersist(roomId, asHost);
+        };
+    }
+    window.addEventListener('pagehide', function () { archQ.forEach(function (_, rid) { flushArchive(rid); }); });
+    setTimeout(function () {   // one-time import of whatever was already stored before this upgrade
+        try {
+            convoRooms.forEach(function (r) {
+                const h = readStoredHistory(r.id, false).filter(isArchivable);
+                if (!h.length) return;
+                let set = archived.get(r.id); if (!set) { set = new Set(); archived.set(r.id, set); }
+                const recs = h.filter(function (m) { return !set.has(m.id); }).map(function (m) { return record(r.id, m); });
+                if (recs.length) putMsgs(recs).then(function () { recs.forEach(function (x) { set.add(x.p.id); }); }).catch(function () {});
+            });
+        } catch (e) {}
+    }, 1500);
+
+    /* ---- tombstones & clear markers so reconnecting members can't resurrect deleted/cleared messages ---- */
+    const tombCache = new Map();
+    function tombSet(rid) {
+        let s = tombCache.get(rid);
+        if (!s) { try { s = new Set(JSON.parse(localStorage.getItem('xchat_tomb_' + rid) || '[]')); } catch (e) { s = new Set(); } tombCache.set(rid, s); }
+        return s;
+    }
+    const isTombed = function (id) { return !!id && tombSet(activeRoomId).has(id); };
+    function addTomb(rid, id) {
+        if (!id) return;
+        const s = tombSet(rid); s.add(id);
+        try { localStorage.setItem('xchat_tomb_' + rid, JSON.stringify(Array.from(s).slice(-2000))); } catch (e) {}
+        delMsg(rid, id).catch(function () {});
+        const set = archived.get(rid); if (set) set.delete(id);
+    }
+    window.__convoTomb = function (id) { addTomb(activeRoomId, id); };
+
+    if (typeof clearChatLocal === 'function') {
+        const baseClear = clearChatLocal;
+        clearChatLocal = function (rid, byHost) {
+            try { localStorage.setItem('xchat_clr_' + rid, String(Date.now())); } catch (e) {}
+            archQ.delete(rid); archived.delete(rid);
+            clearRoomDB(rid).catch(function () {});
+            return baseClear(rid, byHost);
+        };
+    }
+    if (typeof deletePrivateConversation === 'function') {
+        const baseDel = deletePrivateConversation;
+        deletePrivateConversation = function (room) {
+            const r = baseDel.apply(this, arguments);
+            if (room && !roomOf(room.id)) { archQ.delete(room.id); archived.delete(room.id); clearRoomDB(room.id).catch(function () {}); }
+            return r;
+        };
+    }
+    const clearAllBtn = document.getElementById('clearAllDataBtn');
+    if (clearAllBtn) clearAllBtn.addEventListener('click', function () {
+        // the app's own handler runs first; only wipe the archive if it actually cleared everything
+        if (Object.keys(localStorage).some(function (k) { return k.indexOf('xchat_') === 0; })) return;
+        try { if (dbp) dbp.then(function (d) { d.close(); }).catch(function () {}); indexedDB.deleteDatabase('convo_db'); } catch (e) {}
+    });
+
+    /* ================= names, receipts ================= */
+    function nameOf(user) {
+        try { for (const v of onlineUsersMap.values()) if (v && v.profile && v.profile.username === user) return v.profile.displayName || user; } catch (e) {}
+        const m = (messageLog || []).find(function (x) { return x && x.sender && x.sender.username === user; });
+        return (m && m.sender.displayName) || user;
+    }
+    const fmtTime = function (ts) { try { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
+    function rcptText(m) {
+        if (m.pending) return 'Sending…';
+        if (m.undelivered) return 'Not delivered';
+        const r = m.rcpt || {}, users = Object.keys(r);
+        const read = users.filter(function (u) { return r[u].r; }), dlv = users.filter(function (u) { return r[u].d; });
+        if (read.length) {
+            const n = read.map(function (u) { return r[u].name || u; });
+            return 'Seen by ' + (n.length <= 2 ? n.join(', ') : n[0] + ' +' + (n.length - 1));
+        }
+        if (dlv.length) return dlv.length === 1 ? 'Delivered' : 'Delivered to ' + dlv.length;
+        return (m.readBy && m.readBy.length) ? 'Read' : 'Sent';
+    }
+    window.__convoRcptText = rcptText;
+    function wrapperOf(id) {
+        const ws = messagesBox.querySelectorAll('.message-wrapper');
+        for (let i = ws.length - 1; i >= 0; i--) if (ws[i].dataset.msgId === id) return ws[i];
+        return null;
+    }
+    function refreshReceipt(id) {
+        if (activeRoomId !== visibleRoomId) return;
+        const m = (messageLog || []).find(function (x) { return x && x.id === id; });
+        const w = m && wrapperOf(id), r = w && w.querySelector('.msg-meta-receipt');
+        if (!r) return;
+        r.textContent = rcptText(m);
+        r.classList.toggle('convo-pending', !!m.pending);
+    }
+    function refreshAllReceipts() {
+        (messageLog || []).forEach(function (m) { if (m && m.sender && m.sender.username === U()) refreshReceipt(m.id); });
+    }
+    const saveT = new Map();
+    function schedSave(rid) {
+        if (saveT.has(rid)) return;
+        saveT.set(rid, setTimeout(function () { saveT.delete(rid); runInRoomSession(rid, function () { persistRoomHistory(rid, isHost); }); }, 300));
+    }
+    function setRcpt(id, user, name, kind) {
+        const m = (messageLog || []).find(function (x) { return x && x.id === id; });
+        if (!m || !m.sender || m.sender.username !== U() || !user || user === U()) return;
+        m.rcpt = m.rcpt || {};
+        const r = m.rcpt[user] = m.rcpt[user] || { name: name || user };
+        if (name && (!r.name || name !== user)) r.name = name;
+        r.d = r.d || Date.now();
+        if (kind === 'r') { r.r = r.r || Date.now(); m.readBy = Array.from(new Set((m.readBy || []).concat(user))); }
+        schedSave(activeRoomId);
+        refreshReceipt(id);
+    }
+    const pop = document.createElement('div');
+    pop.id = 'convoRcptPop'; document.body.appendChild(pop);
+    function closePop() { pop.classList.remove('show'); }
+    messagesBox.addEventListener('click', function (e) {
+        const r = e.target.closest && e.target.closest('.msg-meta-receipt');
+        if (!r) return;
+        const w = r.closest('.message-wrapper'), m = w && (messageLog || []).find(function (x) { return x.id === w.dataset.msgId; });
+        if (!m) return;
+        e.stopPropagation();
+        const rc = m.rcpt || {}, rows = new Map();
+        try { onlineUsersMap.forEach(function (v) { if (v && v.profile && v.profile.username && v.profile.username !== U()) rows.set(v.profile.username, v.profile.displayName || v.profile.username); }); } catch (er) {}
+        Object.keys(rc).forEach(function (u) { rows.set(u, rc[u].name || u); });
+        pop.textContent = '';
+        const h = document.createElement('h4');
+        h.textContent = m.pending ? 'Waiting for connection. It will send automatically.' : 'Message status';
+        pop.appendChild(h);
+        if (!rows.size && !m.pending) { const row = document.createElement('div'); row.className = 'rp-row'; row.innerHTML = '<span></span><span></span>'; row.firstChild.textContent = 'Nobody else is here yet'; pop.appendChild(row); }
+        rows.forEach(function (nm, u) {
+            const row = document.createElement('div'); row.className = 'rp-row';
+            const a = document.createElement('span'), b = document.createElement('span');
+            const x = rc[u] || {};
+            a.textContent = nm;
+            b.textContent = x.r ? '✓✓ Seen ' + fmtTime(x.r) : x.d ? '✓ Delivered ' + fmtTime(x.d) : 'Not delivered yet';
+            row.append(a, b); pop.appendChild(row);
+        });
+        const rect = r.getBoundingClientRect();
+        pop.classList.add('show');
+        pop.style.left = Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, rect.right - pop.offsetWidth)) + 'px';
+        pop.style.top = Math.max(8, rect.top - pop.offsetHeight - 8) + 'px';
+    });
+    document.addEventListener('pointerdown', function (e) { if (!pop.contains(e.target)) closePop(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePop(); });
+
+    /* ================= outgoing queue ================= */
+    const wire = function (p) { const w = Object.assign({}, p); delete w.pending; delete w.rcpt; return w; };
+    const isPendingOwn = function (m) { return m && m.pending && m.sender && m.sender.username === U(); };
+
+    window.convoDeliver = function (packet) {
+        const rid = activeRoomId;
+        if (isHost) { try { broadcastPacket(wire(packet), null); } catch (e) {} packet.pending = false; }
+        else if (hostConnection && hostConnection.open) {
+            try { hostConnection.send(wire(packet)); } catch (e) {}
+            packet.pending = true; attemptAt.set(packet.id, Date.now());
+        } else packet.pending = true;   // offline: kept and sent automatically on reconnect
+        refreshReceipt(packet.id);
+        persistRoomHistory(rid, isHost);
+    };
+
+    function flush(rid) {   // runs inside the room's session
+        const mine = (messageLog || []).filter(isPendingOwn);
+        if (!mine.length) return;
+        const now = Date.now(); let changed = false;
+        mine.forEach(function (m) {
+            if (isHost) {
+                if (m.type === 'FILE') { startUpload(rid, m.id); return; }
+                try { broadcastPacket(wire(m), null); } catch (e) {}
+                m.pending = false; changed = true; refreshReceipt(m.id); return;
+            }
+            if (!(hostConnection && hostConnection.open) || uploading.has(m.id)) return;
+            if ((attemptAt.get(m.id) || 0) + RESEND_MS > now) return;
+            attemptAt.set(m.id, now);
+            if (m.type === 'FILE') {
+                const n = (fileTries.get(m.id) || 0) + 1;
+                if (n > 3) { m.pending = false; m.undelivered = true; changed = true; refreshReceipt(m.id); return; }   // host never confirmed (e.g. an older version)
+                fileTries.set(m.id, n);
+                startUpload(rid, m.id);
+            }
+            else { try { hostConnection.send(wire(m)); } catch (e) {} }
+        });
+        if (changed) persistRoomHistory(rid, isHost);
+    }
+
+    /* ================= linked / hosting hooks ================= */
+    function sendHist() {
+        if (!(hostConnection && hostConnection.open)) return;
+        const all = (messageLog || []).filter(function (m) { return m && m.type === 'CHAT' && m.id && !m.pending; }).slice(-200).map(wire);
+        let total = 0; const out = [];
+        for (let i = all.length - 1; i >= 0; i--) { const sz = JSON.stringify(all[i]).length; if (total + sz > 250000) break; total += sz; out.unshift(all[i]); }
+        if (out.length) { try { hostConnection.send({ type: 'Z_HIST', messages: out }); } catch (e) {} }
+    }
+    window.__convoOnLinked = function (rid) {
+        hb.set(rid, { conn: hostConnection, last: Date.now(), failed: false });
+        sendHist();
+        flush(rid);
+    };
+    window.__convoOnHosting = function (rid) {
+        let changed = false;
+        (messageLog || []).forEach(function (m) { if (isPendingOwn(m) && m.type === 'CHAT') { m.pending = false; changed = true; } });
+        if (changed) { persistRoomHistory(rid, true); refreshAllReceipts(); }
+    };
+
+    /* ================= heartbeat + queue sweeper ================= */
+    setInterval(function () {
+        const now = Date.now();
+        convoRooms.forEach(function (room) {
+            const rid = room.id, s = sess(rid);
+            if (!s) return;
+            if (!s.isHost && s.hostConnection && s.hostConnection.open) {
+                let e = hb.get(rid);
+                if (!e || e.conn !== s.hostConnection) { e = { conn: s.hostConnection, last: now, failed: false }; hb.set(rid, e); }
+                try { s.hostConnection.send({ type: 'Z_PING', t: now }); } catch (er) {}
+                if (!document.hidden && !e.failed && now - e.last > DEAD_MS) { e.failed = true; net.fail(rid); }
+            }
+            if (s.messageLog && s.messageLog.some(isPendingOwn) && net.linkOk(rid)) runInRoomSession(rid, function () { flush(rid); });
+        });
+    }, 1000);
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) return;
+        const now = Date.now();
+        hb.forEach(function (e) { e.last = now; });
+    });
+
+    /* ================= chunked files ================= */
+    const toU8 = function (d) { return d instanceof ArrayBuffer ? new Uint8Array(d) : (ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : null); };
+    function urlFor(fid, blob) { let u = urls.get(fid); if (!u) { u = URL.createObjectURL(blob); urls.set(fid, u); } return u; }
+    function setProgDOM(rid, id) {
+        if (rid !== visibleRoomId) return;
+        const w = wrapperOf(id), fx = w && w.querySelector('.convo-fx'), x = xfers.get(id);
+        if (!fx || !x) return;
+        const bar = fx.querySelector('.convo-bar > i'), lab = fx.querySelector('.convo-lab'), pct = Math.round((x.pct || 0) * 100);
+        if (bar) bar.style.width = pct + '%';
+        if (lab) lab.textContent = (x.dir === 'up' ? 'Sending… ' : 'Receiving… ') + pct + '%';
+    }
+    function updateFileUI(w, m) {
+        const a = w.querySelector('.bubble a'), fx = w.querySelector('.convo-fx');
+        if (!a || !fx) return;
+        const blob = memFiles.get(m.fileId), x = xfers.get(m.id);
+        if (blob) { a.href = urlFor(m.fileId, blob); a.download = m.fileName || 'file'; }
+        fx.textContent = '';
+        if (x) {
+            const bar = document.createElement('div'); bar.className = 'convo-bar'; bar.appendChild(document.createElement('i'));
+            const lab = document.createElement('span'); lab.className = 'convo-lab';
+            fx.append(bar, lab); setProgDOM(visibleRoomId, m.id);
+            return;
+        }
+        if (blob) {
+            if (String(m.fileType || '').indexOf('image/') === 0 && blob.size < 12e6 && !w.querySelector('.bubble img')) {
+                const img = document.createElement('img'); img.src = urlFor(m.fileId, blob); img.alt = m.fileName || '';
+                w.querySelector('.bubble').insertBefore(img, fx);
+            }
+            return;
+        }
+        if (m.failed) { const s = document.createElement('span'); s.className = 'convo-err'; s.textContent = 'This file is no longer available.'; fx.appendChild(s); return; }
+        const b = document.createElement('button'); b.type = 'button'; b.textContent = m.incomplete ? 'Download (interrupted)' : 'Download';
+        b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); requestFile(m); });
+        fx.appendChild(b);
+    }
+    function updateFileUIById(id) {
+        if (activeRoomId !== visibleRoomId) return;
+        const m = (messageLog || []).find(function (x) { return x && x.id === id; }), w = m && wrapperOf(id);
+        if (m && w) updateFileUI(w, m);
+    }
+    function decorateFile(w, m, type) {
+        const bubble = w.querySelector('.bubble'); if (!bubble) return;
+        if (!bubble.querySelector('.convo-fx')) { const fx = document.createElement('div'); fx.className = 'convo-fx'; bubble.appendChild(fx); }
+        if (type === 'sent' && !w.querySelector('.msg-meta-receipt')) {
+            const r = document.createElement('div'); r.className = 'msg-meta-receipt'; r.dataset.msgId = m.id; r.textContent = rcptText(m);
+            if (m.pending) r.classList.add('convo-pending');
+            w.appendChild(r);
+        }
+        const a = bubble.querySelector('a');
+        if (a) a.addEventListener('click', function (e) { if (!memFiles.has(m.fileId)) { e.preventDefault(); requestFile(m); } });
+        updateFileUI(w, m);
+        if (!memFiles.has(m.fileId)) {
+            const rid = activeRoomId;
+            getFile(m.fileId).then(function (rec) {
+                if (rec && rec.blob) { memFiles.set(m.fileId, rec.blob); if (rid === visibleRoomId && w.isConnected) updateFileUI(w, m); }
+            }).catch(function () {});
+        }
+    }
+    const baseAppendFile = appendFileMessage;
+    appendFileMessage = function (msg, type) {
+        if (!msg || !msg.fileId) return baseAppendFile(msg, type);
+        baseAppendFile(Object.assign({}, msg, { fileData: undefined }), type);
+        const w = wrapperOf(msg.id);
+        if (w) decorateFile(w, msg, type);
+    };
+
+    function drain(conns, alive) {
+        return (async function () {
+            let waited = 0;
+            while (alive()) {
+                if (!conns.some(function (c) { return c.dataChannel && c.dataChannel.bufferedAmount > HIGH; })) return true;
+                await sleep(25); waited += 25;
+                if (waited > 30000) return false;
+            }
+            return false;
+        })();
+    }
+    async function streamFile(m, blob, conns, alive, onProg) {
+        const n = Math.max(1, Math.ceil(blob.size / CHUNK));
+        const send = function (o) { conns.forEach(function (c) { try { if (c.open) c.send(o); } catch (e) {} }); };
+        send({ type: 'Z_FBEGIN', mid: m.id, fid: m.fileId, n: n, name: m.fileName, size: m.fileSize, ftype: m.fileType, sender: stripSecret(m.sender), timestamp: m.timestamp, time: m.time });
+        for (let i = 0; i < n; i++) {
+            if (!alive()) return false;
+            if (!(await drain(conns, alive))) return false;
+            const buf = await blob.slice(i * CHUNK, (i + 1) * CHUNK).arrayBuffer();
+            if (!alive()) return false;
+            send({ type: 'Z_FCHUNK', fid: m.fileId, i: i, d: buf });
+            onProg((i + 1) / n);
+            if ((i & 15) === 15) await sleep(0);
+        }
+        send({ type: 'Z_FEND', fid: m.fileId });
+        return true;
+    }
+    async function loadBlob(fid) {
+        let b = memFiles.get(fid);
+        if (!b) { try { const rec = await getFile(fid); b = rec && rec.blob; if (b) memFiles.set(fid, b); } catch (e) {} }
+        return b || null;
+    }
+    async function startUpload(rid, id) {
+        if (uploading.has(id)) return;
+        const s = sess(rid); if (!s) return;
+        const m = (s.messageLog || []).find(function (x) { return x && x.id === id; }); if (!m) return;
+        let conns, alive;
+        if (s.isHost) {
+            conns = (s.connections || []).filter(function (c) { return c.open; });
+            alive = function () { return true; };
+        } else {
+            const c = s.hostConnection;
+            if (!c || !c.open) return;
+            conns = [c];
+            alive = function () { const cur = sess(rid); return !!cur && cur.hostConnection === c && c.open; };
+        }
+        uploading.add(id);
+        const blob = await loadBlob(m.fileId);
+        if (!blob) {
+            uploading.delete(id);
+            runInRoomSession(rid, function () { m.pending = false; m.failed = true; updateFileUIById(id); refreshReceipt(id); persistRoomHistory(rid, isHost); });
+            return;
+        }
+        let ok = false;
+        if (!conns.length) ok = true;
+        else {
+            attemptAt.set(id, Date.now());
+            xfers.set(id, { dir: 'up', pct: 0 });
+            runInRoomSession(rid, function () { updateFileUIById(id); });
+            try { ok = await streamFile(m, blob, conns, alive, function (p) { const x = xfers.get(id); if (x) x.pct = p; setProgDOM(rid, id); }); } catch (e) { console.warn('upload failed', e); }
+        }
+        uploading.delete(id); xfers.delete(id); attemptAt.set(id, Date.now());
+        runInRoomSession(rid, function () {
+            const mm = (messageLog || []).find(function (x) { return x && x.id === id; });
+            if (ok && isHost && mm) { mm.pending = false; persistRoomHistory(rid, true); }
+            updateFileUIById(id); refreshReceipt(id);
+        });
+    }
+
+    window.__convoFileHandler = function (file) {
+        if (file.size > MAX_FILE) { alert('Files must be smaller than 25 MB.'); return; }
+        const rid = activeRoomId, fid = 'f_' + rand();
+        const m = {
+            type: 'FILE', id: 'msg_' + rand(), timestamp: Date.now(), sender: currentUser, fileId: fid, fileName: file.name, fileSize: file.size,
+            fileType: file.type || 'application/octet-stream', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), pending: true
+        };
+        memFiles.set(fid, file);
+        putFile(fid, file, { name: file.name, type: m.fileType, size: file.size }).catch(function () {});
+        messageLog.push(m);
+        persistRoomHistory(rid, isHost);
+        appendFileMessage(m, 'sent');
+        const room = roomOf(rid);
+        if (room) { room.lastMessage = '📎 ' + file.name; room.lastActivity = Date.now(); }
+        renderConversationList();
+        startUpload(rid, m.id);
+    };
+
+    const relay = function (obj, except) { (connections || []).forEach(function (c) { if (c !== except && c.open) { try { c.send(obj); } catch (e) {} } }); };
+
+    function ackReceived(id, senderName, src) {
+        if (!id || senderName === U()) return;
+        const who = { user: U(), name: (currentUser && currentUser.displayName) || U() };
+        try {
+            if (isHost) { if (src && src.open) src.send(Object.assign({ type: 'Z_ACK', id: id }, who)); }
+            else if (hostConnection && hostConnection.open) hostConnection.send(Object.assign({ type: 'Z_DLV', id: id }, who));
+        } catch (e) {}
+    }
+    function requestFile(m) {
+        if (isHost || !(hostConnection && hostConnection.open)) {
+            if (isHost) { m.failed = true; updateFileUIById(m.id); } else alert('Reconnect to the chat first, then try again.');
+            return;
+        }
+        m.failed = false;
+        xfers.set(m.id, { dir: 'down', pct: 0 });
+        updateFileUIById(m.id);
+        hostConnection.send({ type: 'Z_FREQ', mid: m.id, fid: m.fileId });
+        const rid = activeRoomId;
+        setTimeout(function () {
+            const x = xfers.get(m.id);
+            if (x && x.pct === 0 && !Array.from(incoming.values()).some(function (t) { return t.mid === m.id; })) {
+                xfers.delete(m.id);
+                runInRoomSession(rid, function () { m.failed = true; updateFileUIById(m.id); });
+            }
+        }, 10000);
+    }
+
+    function onFBegin(p, src) {
+        if (!p || !p.fid || !p.mid || !(p.n >= 1) || p.n > MAX_CHUNKS || !(p.size >= 0) || p.size > MAX_FILE * 1.05 || isTombed(p.mid)) return;
+        const sender = stripSecret(p.sender || {}); if (!sender.username) return;
+        let m = messageLog.find(function (x) { return x && x.id === p.mid; });
+        if (m && memFiles.has(m.fileId) && !m.incomplete) {   // we already have it: just acknowledge the repeat
+            incoming.set(p.fid, { skip: true });
+            if (isHost && src) ackReceived(m.id, m.sender && m.sender.username, src);
+            return;
+        }
+        if (!m) {
+            m = { type: 'FILE', id: p.mid, timestamp: p.timestamp || Date.now(), time: p.time || '', sender: sender, fileId: p.fid,
+                  fileName: String(p.name || 'file').slice(0, 200), fileSize: p.size, fileType: String(p.ftype || 'application/octet-stream').slice(0, 100), incomplete: true };
+            messageLog.push(m);
+            if (activeRoomId === visibleRoomId) appendFileMessage(m, sender.username === U() ? 'sent' : 'received');
+        } else { m.incomplete = true; m.failed = false; }
+        incoming.set(p.fid, { mid: p.mid, rid: activeRoomId, n: p.n, parts: new Array(p.n), got: 0, type: m.fileType, src: src });
+        xfers.set(p.mid, { dir: 'down', pct: 0 });
+        updateFileUIById(p.mid);
+        if (isHost && src) relay(p, src);
+    }
+    function onFChunk(p, src) {
+        const t = incoming.get(p.fid);
+        if (!t || t.skip || t.rid !== activeRoomId || !(p.i >= 0 && p.i < t.n)) return;
+        const d = toU8(p.d); if (!d) return;
+        if (!t.parts[p.i]) { t.parts[p.i] = d; t.got++; }
+        const x = xfers.get(t.mid); if (x) { x.pct = t.got / t.n; setProgDOM(t.rid, t.mid); }
+        if (isHost && src) relay(p, src);
+    }
+    function onFEnd(p, src) {
+        const t = incoming.get(p.fid); incoming.delete(p.fid);
+        if (!t || t.skip || t.rid !== activeRoomId) return;
+        const m = messageLog.find(function (x) { return x && x.id === t.mid; });
+        xfers.delete(t.mid);
+        if (!m || t.got !== t.n) { updateFileUIById(t.mid); return; }   // interrupted: shows a Download button
+        const blob = new Blob(t.parts, { type: t.type });
+        memFiles.set(m.fileId, blob);
+        putFile(m.fileId, blob, { name: m.fileName, type: m.fileType, size: m.fileSize }).catch(function () {});
+        m.incomplete = false; m.failed = false;
+        persistRoomHistory(activeRoomId, isHost);
+        updateFileUIById(m.id);
+        if (isHost && src) relay(p, src);
+        ackReceived(m.id, m.sender && m.sender.username, src);
+        if (m.sender && m.sender.username !== U()) {
+            const room = roomOf(activeRoomId);
+            if (room) { room.lastMessage = '📎 ' + m.fileName; room.lastActivity = Date.now(); if (activeRoomId !== visibleRoomId) room.unread = (room.unread || 0) + 1; }
+            try { notifyNewMessage(m); } catch (e) {}
+            renderConversationList();
+        }
+    }
+    function onFReq(p, src) {
+        if (!isHost || !src) return;
+        const m = messageLog.find(function (x) { return x && (x.id === p.mid || (p.fid && x.fileId === p.fid)); });
+        if (!m || !m.fileId) { try { src.send({ type: 'Z_FERR', mid: p.mid }); } catch (e) {} return; }
+        (async function () {
+            const blob = await loadBlob(m.fileId);
+            if (!blob) { try { src.send({ type: 'Z_FERR', mid: m.id }); } catch (e) {} return; }
+            await streamFile(m, blob, [src], function () { return src.open; }, function () {});
+        })();
+    }
+
+    /* ================= packet handling ================= */
+    function onHist(p, src) {
+        if (!isHost) return;
+        let cleared = 0; try { cleared = Number(localStorage.getItem('xchat_clr_' + activeRoomId)) || 0; } catch (e) {}
+        const known = new Set(messageLog.map(packetIdentity)), fresh = [];
+        (Array.isArray(p.messages) ? p.messages : []).slice(-300).forEach(function (m) {
+            if (!m || m.type !== 'CHAT' || !m.id || !m.sender || !m.sender.username) return;
+            if (known.has(packetIdentity(m)) || isTombed(m.id) || (m.timestamp || 0) < cleared) return;
+            const c = Object.assign({}, m, { sender: stripSecret(m.sender) }); delete c.pending; delete c.rcpt;
+            fresh.push(c); known.add(packetIdentity(m));
+        });
+        if (!fresh.length) return;
+        mergeHistoryPackets(fresh);
+        try { broadcastPacket({ type: 'SYNC_HISTORY', messages: fresh }, src); } catch (e) {}
+    }
+    function handleZ(p, src) {
+        switch (p.type) {
+            case 'Z_PING': if (src && src.open) { try { src.send({ type: 'Z_PONG', t: p.t }); } catch (e) {} } break;
+            case 'Z_PONG': { const e = hb.get(activeRoomId); if (e && e.conn === hostConnection) e.last = Date.now(); break; }
+            case 'Z_ACK': {
+                const m = messageLog.find(function (x) { return x && x.id === p.id; });
+                if (m && m.sender && m.sender.username === U()) { if (m.pending) { m.pending = false; schedSave(activeRoomId); } setRcpt(p.id, p.user, p.name, 'd'); refreshReceipt(p.id); }
+                break;
+            }
+            case 'Z_DLV': {
+                const m = messageLog.find(function (x) { return x && x.id === p.id; });
+                if (!m) break;
+                if (m.sender && m.sender.username === U()) setRcpt(p.id, p.user, p.name, 'd');
+                else if (isHost && m.sender) {   // forward only to the person who wrote it
+                    let target = null;
+                    onlineUsersMap.forEach(function (v) { if (v && v.conn && v.profile && v.profile.username === m.sender.username) target = v.conn; });
+                    if (target && target.open && target !== src) { try { target.send(p); } catch (e) {} }
+                }
+                break;
+            }
+            case 'Z_HIST': onHist(p, src); break;
+            case 'Z_FBEGIN': onFBegin(p, src); break;
+            case 'Z_FCHUNK': onFChunk(p, src); break;
+            case 'Z_FEND': onFEnd(p, src); break;
+            case 'Z_FREQ': onFReq(p, src); break;
+            case 'Z_FERR': {
+                const m = messageLog.find(function (x) { return x && x.id === p.mid; });
+                if (m) { m.failed = true; xfers.delete(m.id); updateFileUIById(m.id); }
+                break;
+            }
+        }
+    }
+    const baseHandle = handleIncomingPacket;
+    handleIncomingPacket = function (packet, sourceConn) {
+        if (packet && typeof packet.type === 'string' && packet.type.indexOf('Z_') === 0) { try { handleZ(packet, sourceConn); } catch (e) { console.warn('Z packet error', e); } return; }
+        const chatLike = packet && (packet.type === 'CHAT' || packet.type === 'FILE') && packet.id;
+        if (chatLike) {
+            if (messageLog.some(function (m) { return m && m.id === packet.id; })) {   // a retry of something we already have
+                if (isHost && sourceConn) ackReceived(packet.id, packet.sender && packet.sender.username, sourceConn);
+                return;
+            }
+            if (isTombed(packet.id)) return;
+        }
+        baseHandle(packet, sourceConn);
+        if (chatLike) ackReceived(packet.id, packet.sender && packet.sender.username, sourceConn);
+        else if (packet && packet.type === 'READ_RECEIPT') setRcpt(packet.msgId, packet.reader, nameOf(packet.reader), 'r');
+        else if (packet && packet.type === 'DELETE' && packet.id) addTomb(activeRoomId, packet.id);
+    };
+
+    if (typeof mergeHistoryPackets === 'function') {   // keep local receipts when a synced copy replaces our message
+        const baseMerge = mergeHistoryPackets;
+        mergeHistoryPackets = function (packets) {
+            const keep = new Map();
+            (messageLog || []).forEach(function (m) { if (m && m.id && (m.rcpt || m.pending)) keep.set(m.id, { rcpt: m.rcpt, readBy: m.readBy }); });
+            const out = baseMerge(packets);
+            (messageLog || []).forEach(function (m) { const k = m && keep.get(m.id); if (k && k.rcpt && !m.rcpt) { m.rcpt = k.rcpt; if (k.readBy) m.readBy = k.readBy; } });
+            refreshAllReceipts();
+            return out;
+        };
+    }
+
+    /* ================= older messages (from the archive) ================= */
+    const oldestTs = function (log) { let t = Infinity; (log || []).forEach(function (m) { if (m && isArchivable(m) && m.timestamp < t) t = m.timestamp; }); return t; };
+    let olderBusy = false;
+    async function loadOlder(rid, untilId) {
+        if (olderBusy) return false;
+        olderBusy = true;
+        try {
+            const s = sess(rid); if (!s) return false;
+            let before = oldestTs(s.messageLog), got = [];
+            if (before === Infinity) return false;
+            for (let guard = 0; guard < 40 && !got.length; guard++) {
+                const rows = await olderRows(rid, before, 100);
+                if (!rows.length) break;
+                before = rows[rows.length - 1].ts;
+                const have = new Set(s.messageLog.map(packetIdentity)), tomb = tombSet(rid);
+                got = rows.map(function (r) { return r.p; }).filter(function (p) { return p && !have.has(packetIdentity(p)) && !tomb.has(p.id); }).reverse();
+            }
+            if (!got.length) return false;
+            runInRoomSession(rid, function () {
+                messageLog = got.concat(messageLog);
+                if (rid !== visibleRoomId) return;
+                const prevH = messagesBox.scrollHeight, prevTop = messagesBox.scrollTop;
+                const anchor = messagesBox.querySelector('.message-wrapper');
+                got.forEach(function (m) {
+                    const kind = m.sender && m.sender.username === U() ? 'sent' : 'received';
+                    if (m.type === 'CHAT') appendMessage(m, kind); else if (m.type === 'FILE') appendFileMessage(m, kind); else return;
+                    const el = messagesBox.lastElementChild;
+                    if (anchor && el) messagesBox.insertBefore(el, anchor);
+                });
+                messagesBox.scrollTop = prevTop + (messagesBox.scrollHeight - prevH);
+            });
+            return true;
+        } catch (e) { return false; } finally { olderBusy = false; }
+    }
+    async function loadOlderUntil(rid, id) {
+        for (let i = 0; i < 60; i++) {
+            const s = sess(rid);
+            if (s && s.messageLog.some(function (m) { return m && m.id === id; })) return true;
+            if (!(await loadOlder(rid))) return false;
+        }
+        return false;
+    }
+    let olderT = null;
+    function scheduleOlderBtn() { clearTimeout(olderT); olderT = setTimeout(refreshOlderBtn, 250); }
+    async function refreshOlderBtn() {
+        const rid = visibleRoomId, s = sess(rid);
+        let wrap = messagesBox.querySelector('.convo-older-wrap'), has = false;
+        if (s && s.messageLog) {
+            const t = oldestTs(s.messageLog);
+            if (t !== Infinity) { try { has = (await olderRows(rid, t, 1)).length > 0; } catch (e) { has = false; } }
+        }
+        if (rid !== visibleRoomId) return;
+        wrap = messagesBox.querySelector('.convo-older-wrap');
+        if (has && !wrap) {
+            wrap = document.createElement('div'); wrap.className = 'convo-older-wrap';
+            const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Load earlier messages';
+            b.addEventListener('click', async function () { b.disabled = true; b.textContent = 'Loading…'; const ok = await loadOlder(visibleRoomId); b.disabled = false; b.textContent = 'Load earlier messages'; if (!ok) scheduleOlderBtn(); });
+            wrap.appendChild(b); messagesBox.insertBefore(wrap, messagesBox.firstChild);
+        } else if (!has && wrap) wrap.remove();
+    }
+    new MutationObserver(function (muts) {
+        if (muts.every(function (m) { return Array.from(m.addedNodes).concat(Array.from(m.removedNodes)).every(function (n) { return n.classList && n.classList.contains('convo-older-wrap'); }); })) return;
+        scheduleOlderBtn();
+    }).observe(messagesBox, { childList: true });
+
+    /* ================= search across every chat ================= */
+    const input = document.getElementById('sidebarSearchInput');
+    const panel = document.createElement('div');
+    panel.id = 'convoSearchPanel'; panel.setAttribute('role', 'listbox');
+    if (input) input.insertAdjacentElement('afterend', panel);
+    let searchSeq = 0, searchT = null;
+    const txt = function (m) { return String(m.text || m.fileName || ''); };
+    async function runSearch() {
+        const q = (input.value || '').trim().toLowerCase(), seq = ++searchSeq;
+        if (q.length < 2) { panel.classList.remove('show'); return; }
+        const found = new Map(), ids = new Set(convoRooms.map(function (r) { return r.id; }));
+        const add = function (rid, m) { if (!m || !ids.has(rid) || txt(m).toLowerCase().indexOf(q) < 0) return; const k = rid + '|' + (m.id || m.timestamp); if (!found.has(k)) found.set(k, { rid: rid, m: m }); };
+        convoRooms.forEach(function (r) {
+            readStoredHistory(r.id, false).forEach(function (m) { if (m && (m.type === 'CHAT' || m.type === 'FILE')) add(r.id, m); });
+            const s = sess(r.id); if (s && s.messageLog) s.messageLog.forEach(function (m) { if (m && (m.type === 'CHAT' || m.type === 'FILE')) add(r.id, m); });
+        });
+        try { (await scanAll(function (v) { return ids.has(v.rid) && txt(v.p).toLowerCase().indexOf(q) >= 0; }, 400)).forEach(function (v) { if (!tombSet(v.rid).has(v.p.id)) add(v.rid, v.p); }); } catch (e) {}
+        if (seq !== searchSeq) return;
+        const list = Array.from(found.values()).sort(function (a, b) { return (b.m.timestamp || 0) - (a.m.timestamp || 0); }).slice(0, 40);
+        panel.textContent = '';
+        const head = document.createElement('div'); head.className = 'sr-head';
+        head.textContent = list.length ? 'Messages in all chats' : 'No messages match “' + input.value.trim() + '”';
+        panel.appendChild(head);
+        list.forEach(function (it) {
+            const room = roomOf(it.rid), b = document.createElement('button'); b.type = 'button'; b.className = 'sr-item'; b.setAttribute('role', 'option');
+            const meta = document.createElement('div'); meta.className = 'sr-meta';
+            const l = document.createElement('span'), r = document.createElement('span');
+            l.textContent = ((room && room.name) || 'Chat') + ' · ' + ((it.m.sender && it.m.sender.displayName) || 'Someone');
+            r.textContent = it.m.timestamp ? new Date(it.m.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+            meta.append(l, r);
+            const body = document.createElement('div'); body.className = 'sr-text';
+            const full = txt(it.m), at = full.toLowerCase().indexOf(q), from = Math.max(0, at - 30);
+            const piece = (from > 0 ? '…' : '') + full.slice(from, from + 140);
+            const i2 = piece.toLowerCase().indexOf(q);
+            body.append(document.createTextNode(piece.slice(0, i2)));
+            const mk = document.createElement('mark'); mk.textContent = piece.slice(i2, i2 + q.length); body.appendChild(mk);
+            body.append(document.createTextNode(piece.slice(i2 + q.length)));
+            b.append(meta, body);
+            b.addEventListener('click', function () { panel.classList.remove('show'); jumpTo(it.rid, it.m.id); });
+            panel.appendChild(b);
+        });
+        panel.classList.add('show');
+    }
+    async function jumpTo(rid, id) {
+        const room = roomOf(rid); if (!room) return;
+        if (rid !== visibleRoomId) { switchingRoom = false; activateConversation(room); await sleep(300); }
+        if (!id) return;
+        const s = sess(rid);
+        if (s && !s.messageLog.some(function (m) { return m && m.id === id; })) await loadOlderUntil(rid, id);
+        await sleep(60);
+        const w = wrapperOf(id);
+        if (w) { w.classList.add('search-highlight'); w.scrollIntoView({ block: 'center', behavior: 'smooth' }); setTimeout(function () { w.classList.remove('search-highlight'); }, 2400); }
+    }
+    if (input) {
+        input.addEventListener('input', function () { clearTimeout(searchT); searchT = setTimeout(runSearch, 160); });
+        input.addEventListener('keydown', function (e) { if (e.key === 'Escape') panel.classList.remove('show'); });
+    }
+
+    window.__convoUpg = { rcptText: rcptText, memFiles: memFiles, loadOlder: loadOlder, olderRows: olderRows, flush: flush, runSearch: runSearch, hb: hb, flushArchive: flushArchive, tombSet: tombSet };
 })();
 </script>
 
